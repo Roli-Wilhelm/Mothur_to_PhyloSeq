@@ -1,0 +1,6 @@
+source("http://bioconductor.org/biocLite.R")
+biocLite()
+biocLite("edgeR")
+biocLite("DESeq2")
+biocLite("metagenomeSeq")
+biocLite("phyloseq")
