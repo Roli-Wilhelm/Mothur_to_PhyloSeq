@@ -7,7 +7,7 @@ This code was used to simplify the import of "count data" output from the sequen
 
 Block00 - Installs all required libraries/packages  (Universal)
 
-Block01 - Guides user to import all necessary files for doing analysis with PhyloSeq (for manipulating and performing ecological analyses of community data)	(Universal)
+Block01 - Guides user to import all necessary files for doing analysis with PhyloSeq (for manipulating and performing ecological analyses of community data). The scripts also creates extensive back-up .rds files, since it is generally slow to import large scale sequencing datasets.	(Universal)
 
 Block02 - Guides user through determining differential expression according to some treatment factor using DESeq2 (for examining differential expression) (Universal, but some of the language is geared towards stable isotope probing, i.e. the main factor of interest is "Enrichment", but this can be substituted for whatever you are interested in doing differential analyses on)
 
