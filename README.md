@@ -14,4 +14,9 @@ Block02 - Guides user through determining differential expression according to s
 Feel free to e-mail the author with any questions. It has had two data sets run through it and is reasonably well debugged. The author is novice-to-intermediate, so some portions of code may be slower or could use improvement.
 
 
+The actual PhloSeq project GitHub can be found at the following address.
+
+Visit : https://github.com/joey711/phyloseq
+==================
+
 The code was used in the following publication(s)...
