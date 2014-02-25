@@ -1,6 +1,6 @@
 Mothur_to_PhyloSeq
 ==================
-Guided Import from Mothur to PhyloSeq
+An R-script providing guided import from Mothur data to PhyloSeq
 
 This code was used to simplify the import of "count data" output from the sequence processing pipeline Mothur.
 
