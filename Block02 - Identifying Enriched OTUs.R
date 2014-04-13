@@ -2,15 +2,21 @@ library(DESeq2)
 library(phyloseq)
 library(ggplot2)
 library(reshape2)
+library(limma)
+library(edgeR)
 
 writeLines("Are you re-running the script starting at Block02?")
 
 switch(menu(c("Yes","No")), rerun<-("Yes"), rerun<-("No"))
 
 if (rerun == "Yes") {
-  writeLines(paste("\nPlease re-select your factor list (i.e. design matrix)"))
+  writeLines(paste("\nPlease ENTER your factor list (i.e. design matrix)"))
   Factors<-read.csv(file.choose(), header = T)
   Factors <- Factors[,colSums(is.na(Factors))<nrow(Factors)] #Remove accidental NA-filled columns
+  
+  #Input saved phyloseq object
+  writeLines(paste("\nPlease ENTER your phyloseq object (i.e. original imported data)"))
+  p<-readRDS(file.choose())
   
   #Transpose sample names to rownames
   Factors <- data.frame(Factors, row.names = sample_names(p), stringsAsFactors=F)
@@ -20,8 +26,6 @@ if (rerun == "Yes") {
   cutoff<-scan(n=1, what = character())
   writeLines("\nPlease enter the distinguishing name you originally used (i.e. \"Bacteria\")")
   sign_save<-scan(n=1, what = character())
-  
-  p<-readRDS(paste("Output\\BackUps\\phyloseq_", sign_save, "_", cutoff,".rds", sep=""))
   
 }
 
@@ -49,7 +53,7 @@ writeLines("\nIf this is not correct, you'll have to restart the script and re-e
 
 ###Pre-filtering steps
 #Determine which OTU are not found in the OTU table (after C12 sample have been removed)
-writeLines("\nWe will first remove all OTUs which have zero representation in the C13 group.")
+writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C13 group.")
 total<-nrow(otu_table(p))
 number<-length(which(rowSums(otu_table(p_13C)) == 0))
 percent1<-format(round(((number/total)*100), 2), nsmall = 2)
@@ -58,7 +62,7 @@ p_13C<-otu_table(p_13C)[-which(rowSums(otu_table(p_13C)) == 0),]
 writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
 
 ##Filter based on abundance, maybe rowSum > 5
-writeLines("\nNext we will filter by a minimum abundance value across all C13 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C13 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+writeLines("\nNext, we will filter by a minimum abundance value across all C13 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C13 samples.\n\n Please select a threshold number. [Recommended: 5] ")
 threshold<-scan(n=1, what = numeric())
 number<-length(which(rowSums(otu_table(p_13C)) < threshold))
 p_13C<-otu_table(p_13C)[-which(rowSums(otu_table(p_13C)) < threshold),]
@@ -83,8 +87,20 @@ p_enr<-prune_taxa(p_enr, p)
 writeLines("\nYour data table now looks like this:\n")
 print(p_enr)
 
+#####
+#Fork between Limma and DESeq and Relative Abundance Calculations
+#####
+writeLines("\nWould you like to use DESeq, Limma-voom or Relative Abundance to 12C Controls for differential expression profiling? [To do each one, you must re-run the script]")
+switch(menu(c("DESeq", "Limma-voom", "Relative Abundance")), Method<-("DESeq"), Method<-("Limma"), Method<-("Relative Abundance"))
+
+if (Method == "DESeq") {
+
+#############################
+###DESeq Differential Abundance Profiling
+#############################
 ### Currently have to normalize counts in DESeq without the phyloseq function phyloseq_to_deseq2
 ### This is likely to change shortly once they release this functionality
+#############################
 
 #This step is only made necessary by the fact I have to independently use DESeq, which conflicts with the formatting of a phyloSeq object
 rows<-nrow(otu_table(p_enr))
@@ -110,268 +126,153 @@ colnames(conds)[1]<- paste(status)
 counts<-counts+1
 
 ###Create DESeq Object According to Enrichment any other treatment variable
-writeLines("\nDifferential expression profiling, (package \"DESeq\") will be performed to identify which OTU are differentially expressed according to the enrichment status you have provided.\nYou may provide multiple factors to DESeq in order to reduce the amount of \'within-group\'-type error and focus on enrichment status.\n Because the DESeq function can not handle calling functions as arguments (i.e. as.symbolic), you will have to manually ammend the DESeq Command in a script window which will open.\n\nHave you completed editing this file?")
+writeLines("\nDifferential expression profiling, (package \"DESeq\") will be performed to identify which OTU are differentially expressed according to the enrichment status you have provided.\n Because the DESeq function can not handle calling functions as arguments in R, you will have to manually ENTER the column name in your factor list attributing enrichment status [NOTE: Please SAVE the script before answering following question].\n\n Further, you are able to modify the linear model [not recommended]. Have you added additional terms to linear model?")
 file.edit("DESeq Command.R")
-switch(menu(c("Yes")), proceed<-("Yes"))
+switch(menu(c("Yes", "No")), proceed<-("Yes"), proceed<-("No"))
 
 if (proceed == "Yes") {
   
+  writeLines("\nIf you entered a second factor in addition to \"enrichment\" please ENTER it now: [This is simply used for naming, so if multiple factors were used, enter the first and make a note of it.]")
+  DESeq_factor<-scan(n=1, what = character())
+  
+  ##Run DESeq
   source("DESeq Command.R")
   
-}
-
-###Run Test for Differential Expression
-dds <- DESeq(DE)
-DE_results<-results(dds)
-DE_results<-DE_results[order(DE_results$log2FoldChange),]
-
-writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially expressed in favour of C13 enrichment.")
-
-writeLines("\nHere is the count data for your differentially abundant OTU.")
-print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
-
-writeLines("\nIs it showing abundance in your C13 samples?")
-
-switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
-
-if (order == "No") {
-  
-  DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+  ###Run Test for Differential Expression
+  dds <- DESeq(DE)
+  DE_results<-results(dds)
   DE_results<-DE_results[order(DE_results$log2FoldChange),]
-  writeLines("\nNow it should!")
+  
+  writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially expressed in favour of C13 enrichment.")
+  
+  writeLines("\nHere is the count data for your differentially abundant OTU.")
   print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
   
-}
-
-#Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
-enr_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
-highlikely<-which(DE_results$log2FoldChange < -1.5)
-lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), enr_otu)
-
-enr_otu<-rownames(DE_results)[enr_otu]
-highlikely<-rownames(DE_results)[highlikely]
-highlikely<-data.frame(highlikely)
-colnames(highlikely)<-"OTU"
-lowlikely<-rownames(DE_results)[lowlikely]
-
-writeLines(paste("\nIn total you have recovered ", length(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", length(lowlikely)," will have to be manually inspected and confirmed."))
-
-###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
-d=enr_otu
-OTU_location<- vector(mode="numeric", length=length(d))
-
-for (mercy in 1:length(d)) {
+  writeLines("\nIs it showing abundance in your C13 samples?")
   
-  OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
-  
-}
-
-enr_otu<-counts[OTU_location,]
-
-#Return all Count Data to Original status be subtracting One
-enr_otu <- enr_otu-1
-
-#Make into data.frame
-enr_otu<-data.frame(enr_otu)
-enr_otu$likelihood<-NA
-OTU=1
-
-#Identify demarcate high and low likelihood OTUs and add in the factor information
-for (OTU in 1:nrow(enr_otu)) {
-  
-  if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
-    
-    enr_otu$likelihood[OTU]<- "Low"  
-    
-  } else {
-    
-    enr_otu$likelihood[OTU]<- "High"
-    
-  }
-}    
-
-#Separate high rollers from less clear differentiation
-enr_otu_high<-subset(enr_otu, likelihood == "High")
-enr_otu_low<-subset(enr_otu, likelihood == "Low")
-enr_otu_high$likelihood<- NULL
-enr_otu_low$likelihood<- NULL
-enr_otu_high<-t(enr_otu_high)
-enr_otu_low<-t(enr_otu_low)
-
-#Add in factors
-enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
-enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
-
-#Graph (Highly Likely OTUs as boxplots)
-melted_low<-melt(enr_otu_low)
-melted_high<-melt(enr_otu_high)
-
-writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
-print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
-
-#### Set-up the auto-remove loop
-writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
-writeLines(paste("\nWould you like to manually examine your", length(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
-switch(menu(c("Visualize and edit","Do it myself later")), pain<-("Yes"), pain<-("No"))
-
-if (pain == "Yes") {
-  writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
-  writeLines("Your factor list is :")
-  print(colnames(sample_data(p)))
-  factor_2<-scan(n=1, what = character())
-
-  lowlikely_remove<-data.frame(lowlikely, keep=NA)
-  colnames(lowlikely_remove)[1]<-"OTU"
-  writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
-  for (T in 1:length(lowlikely)) {
-  
-    graphics.off()
-    print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
-    
-    writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
-    print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
-    writeLines(paste("\nYou have curated", T, "OTUs out of a total of", length(lowlikely), sep=" "))
-    switch(menu(c("Keep","Discard")), keep<-("Yes"), keep<-("No"))
-  
-    if (keep == "Yes") {
-    
-      lowlikely_remove$keep[T]<- "1"
-    
-    } else {
-    
-      lowlikely_remove$keep[T]<- "0"
-  
-    }
-  }
-}
-
-writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
-switch(menu(c("Visualize and edit","Do it myself later")), pain<-("Yes"), pain<-("No"))
-
-if (pain == "Yes") {
-  writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
-  writeLines("Your factor list is :")
-  print(colnames(sample_data(p)))
-  factor_2<-scan(n=1, what = character())
-  
-  highlikely_remove<-data.frame(highlikely, keep=NA)
-  colnames(highlikely_remove)[1]<-"OTU"
-  writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
-  
-  for (T in 1:nrow(highlikely)) {
-    
-    graphics.off()
-    print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
-    
-    writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
-    print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
-    writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
-    switch(menu(c("Keep","Discard")), keep<-("Yes"), keep<-("No"))
-    
-    if (keep == "Yes") {
-      
-      highlikely_remove$keep[T]<- "1"
-      
-    } else {
-      
-      highlikely_remove$keep[T]<- "0"
-      
-    }
-  }
-}
-
-
-##Keep the keepers alongside the highlikely OTUs
-manual<-rbind(highlikely_remove, lowlikely_remove)
-manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
-write.csv(manual, file=paste("Output\\C13 OTUs - List of Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
-enr_otu<-as.vector(rbind(as.matrix(highlikely$OTU[highlikely_remove$keep == 1]), as.matrix(lowlikely_remove$OTU[lowlikely_remove$keep == 1])))
-
-#Prune phyloseq to contain enriched OTUs
-p_enr<-prune_taxa(enr_otu, p)
-
-saveRDS(p_enr, file=paste("Output\\BackUps\\p_All_Enriched_OTU_", sign_save, "_", cutoff,".rds", sep=""))
-write.csv(taxa_names(p_enr), file= paste("Output\\p_All_Enriched_OTU_", sign_save, "_", cutoff,".csv", sep=""))
-
-writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
-switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
-
-if (proceed == "Yes") {
+  switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
   
   if (order == "No") {
     
     DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
     DE_results<-DE_results[order(DE_results$log2FoldChange),]
+    writeLines("\nNow it should!")
+    print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
     
   }
   
   #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
-  C12_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+  enr_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
   highlikely<-which(DE_results$log2FoldChange < -1.5)
-  lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), C12_otu)
+  lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), enr_otu)
   
-  C12_otu<-rownames(DE_results)[C12_otu]
+  enr_otu<-rownames(DE_results)[enr_otu]
   highlikely<-rownames(DE_results)[highlikely]
   highlikely<-data.frame(highlikely)
   colnames(highlikely)<-"OTU"
   lowlikely<-rownames(DE_results)[lowlikely]
   
-  writeLines(paste("\nIn total you have recovered ", length(C12_otu)," C12-only OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be C12-only and ", length(lowlikely)," are marginal."))
+  writeLines(paste("\nIn total you have recovered ", length(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", length(lowlikely)," will have to be manually inspected and confirmed."))
   
   ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
-  d=C12_otu
+  
+  ##Loop to parse the location of each designated OTU and pull that info into a new matrix
+  
+  d=enr_otu
   OTU_location<- vector(mode="numeric", length=length(d))
   
   for (mercy in 1:length(d)) {
     
-    OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+    OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
     
   }
   
-  C12_otu<-counts[OTU_location,]
+  enr_otu<-counts[OTU_location,]
   
   #Return all Count Data to Original status be subtracting One
-  C12_otu <- C12_otu-1
+  enr_otu <- enr_otu-1
   
   #Make into data.frame
-  C12_otu<-data.frame(C12_otu)
-  C12_otu$likelihood<-NA
-  OTU=1
-  
-  #Identify demarcate high and low likelihood OTUs and add in the factor information
-  for (OTU in 1:nrow(C12_otu)) {
+  enr_otu<-data.frame(enr_otu)
+  enr_otu$likelihood<-NA
     
-    if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+  #Identify demarcate high and low likelihood OTUs and add in the factor information
+  for (OTU in 1:nrow(enr_otu)) {
+    
+    if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
       
-      C12_otu$likelihood[OTU]<- "Low"  
+      enr_otu$likelihood[OTU]<- "Low"  
       
     } else {
       
-      C12_otu$likelihood[OTU]<- "High"
+      enr_otu$likelihood[OTU]<- "High"
       
     }
   }    
   
   #Separate high rollers from less clear differentiation
-  C12_otu_high<-subset(C12_otu, likelihood == "High")
-  C12_otu_low<-subset(C12_otu, likelihood == "Low")
-  C12_otu_high$likelihood<- NULL
-  C12_otu_low$likelihood<- NULL
-  C12_otu_high<-t(C12_otu_high)
-  C12_otu_low<-t(C12_otu_low)
+  enr_otu_high<-subset(enr_otu, likelihood == "High")
+  enr_otu_low<-subset(enr_otu, likelihood == "Low")
+  enr_otu_high$likelihood<- NULL
+  enr_otu_low$likelihood<- NULL
+  enr_otu_high<-t(enr_otu_high)
+  enr_otu_low<-t(enr_otu_low)
   
   #Add in factors
-  C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
-  C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+  enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
+  enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
   
-  #Graph (Highly Likely OTUs as boxplots)
-  melted_low<-melt(C12_otu_low)
-  melted_high<-melt(C12_otu_high)
+  #Prepare for Graph 
+  melted_low<-melt(enr_otu_low)
+  melted_high<-melt(enr_otu_high)
   
-  writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as C12-only.")
+  writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
   print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
-  writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be C12-only? There are ", nrow(highlikely),"of these OTUs?"))
-  switch(menu(c("Visualize and edit","Do it myself later")), pain<-("Yes"), pain<-("No"))
+  
+  #### Set-up the auto-remove loop
+  writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+  writeLines(paste("\nWould you like to manually examine your", length(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+  switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+  
+  if (pain == "Yes") {
+    writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+    writeLines("Your factor list is :")
+    print(colnames(sample_data(p)))
+    factor_2<-scan(n=1, what = character())
+    
+    lowlikely_remove<-data.frame(lowlikely, keep=NA)
+    colnames(lowlikely_remove)[1]<-"OTU"
+    writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+    for (T in 1:length(lowlikely)) {
+      
+      graphics.off()
+      print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+      
+      writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+      print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
+      writeLines(paste("\nYou have curated", T, "OTUs out of a total of", length(lowlikely), sep=" "))
+      switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+      
+      if (keep == "High") {
+        
+        lowlikely_remove$keep[T]<- "2"
+        
+      } 
+      if (keep == "Yes") {
+        
+        lowlikely_remove$keep[T]<- "1"
+        
+      }
+      if (keep == "No") {
+        
+        lowlikely_remove$keep[T]<- "0"
+        
+      }
+    }
+  }
+  
+  writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+  switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
   
   if (pain == "Yes") {
     writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
@@ -389,15 +290,2009 @@ if (proceed == "Yes") {
       print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
       
       writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
-      print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+      print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
       writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
-      switch(menu(c("Keep","Discard")), keep<-("Yes"), keep<-("No"))
+      switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+      
+      if (keep == "High") {
+        
+        highlikely_remove$keep[T]<- "2"
+        
+      } 
       
       if (keep == "Yes") {
         
         highlikely_remove$keep[T]<- "1"
         
+      }
+      
+      if (keep == "No") {
+        
+        highlikely_remove$keep[T]<- "0"
+        
+      }
+    }
+  }
+    
+  ##Keep the keepers alongside the highlikely OTUs
+  manual<-rbind(highlikely_remove, lowlikely_remove)
+  manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+  write.csv(manual, file=paste("Output\\C13 OTUs - DESeq - Manual Edits_", DESeq_factor, "_", sign_save, "_", cutoff, ".csv", sep=""))
+  enr_otu<-as.vector(rbind(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]), as.matrix(lowlikely_remove$OTU[lowlikely_remove$keep >= 1])))
+    
+  #Prune phyloseq to contain enriched OTUs
+  p_enr_DESeq<-prune_taxa(enr_otu, p)
+    
+  saveRDS(p_enr_DESeq, file=paste("Output\\BackUps\\p_Enriched_OTU_DESeq_", DESeq_factor, "_", sign_save, "_", cutoff,".rds", sep=""))
+  write.csv(taxa_names(p_enr_DESeq), file= paste("Output\\p_Enriched_OTU_DESeq_", DESeq_factor, "_", sign_save, "_", cutoff,".csv", sep=""))
+  
+  #####
+  #C12 OTUs
+  #####
+  
+  writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
+  switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
+  
+  if (proceed == "Yes") {
+    p_12C<-prune_samples(colnames(otu_table(p))[which(sample_data(p)[,status] != paste(label))], p)
+    
+    ###Pre-filtering steps
+    #Determine which OTU are not found in the OTU table (after C13 sample have been removed)
+    writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C12 group.")
+    total<-nrow(otu_table(p))
+    number<-length(which(rowSums(otu_table(p_12C)) == 0))
+    percent1<-format(round(((number/total)*100), 2), nsmall = 2)
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) == 0),]
+    
+    writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
+    
+    ##Filter based on abundance, maybe rowSum > 5
+    writeLines("\nNext, we will filter by a minimum abundance value across all C12 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C12 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+    threshold<-scan(n=1, what = numeric())
+    number<-length(which(rowSums(otu_table(p_12C)) < threshold))
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) < threshold),]
+    percent2<-format(round(((number/total)*100), 2), nsmall = 2)
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent2,"percent of the original (pre-filtered) OTUs."))
+    
+    ##Filter based on occurrence in minimum number of samples > 3
+    writeLines("\nNext we will filter by the minimum number of times an OTU must occur in C12 samples.\n\n Please select a minimum number. [Recommended: 3]")
+    min_number<-scan(n=1, what = numeric())
+    present_absent<-otu_table(p_12C)
+    present_absent[present_absent > 0] <- 1
+    number<-length(which(rowSums(present_absent) < min_number))
+    p_12C<-otu_table(p_12C)[-which(rowSums(present_absent) < min_number),]
+    percent3<-format(round(((number/total)*100), 2), nsmall = 2)
+    remaining<-format(round(total*(1-((as.numeric(percent1)/100)+(as.numeric(percent2)/100)+(as.numeric(percent3)/100))),0))
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent3,"percent of the original (pre-filtered) OTUs. Combined, you have removed ", as.numeric(percent1)+as.numeric(percent2)+as.numeric(percent3)," percent of your OTUs, which leaves a total of", remaining,"OTUs in your C12 dataset."))
+    
+    #Return to original phyloseq object
+    p_12C<-intersect(rownames(p_12C), taxa_names(p_12C))
+    p_12C<-prune_taxa(p_12C, p)
+    
+    writeLines("\nYour data table now looks like this:\n")
+    print(p_12C)
+    
+    #This step is only made necessary by the fact I have to independently use DESeq, which conflicts with the formatting of a phyloSeq object
+    rows<-nrow(otu_table(p_12C))
+    cols<-ncol(otu_table(p_12C))
+    counts<-as.matrix(otu_table(p_12C)[,])
+    attributes(counts)<-NULL  #Remove phyloseq parameters
+    counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+    rownames(counts)<-taxa_names(p_12C)   #Return row and column names
+    colnames(counts)<-sample_names(p_12C)
+    counts<-data.frame(counts)
+    
+    #Prepare the condition matrix 
+    conds<-matrix(nrow=cols, ncol=1) #Rows are equal to columns here b/c were talking about samples not OTUs
+    conds[which(sample_data(p_12C)[,status] == paste(label))] <- paste(label)
+    conds[which(sample_data(p_12C)[,status] != paste(label))] <- "C12"
+    conds<-data.frame(conds, as.vector(Factors[, which(colnames(Factors) != paste(status))]))
+    rownames(conds) <- colnames(counts)
+    
+    #Rename column names
+    colnames(conds)[1]<- paste(status)
+    
+    #DESeq calculates the geometric mean, which means all the zeros in my columns are problematic
+    counts<-counts+1
+    
+    ##Run DESeq
+    source("DESeq Command.R")
+    
+    ###Run Test for Differential Expression
+    dds <- DESeq(DE)
+    DE_results<-results(dds)
+    DE_results<-DE_results[order(DE_results$log2FoldChange),]
+    
+    writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C12.")
+    
+    writeLines("\nHere is the count data for your differentially abundant OTU.")
+    print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+    
+    writeLines("\nIs it showing abundance in your C12 samples?")
+    
+    switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+    
+    if (order == "No") {
+      
+      DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+      DE_results<-DE_results[order(DE_results$log2FoldChange),]
+      writeLines("\nNow it should!")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+      
+    }
+    
+    #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+    C12_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+    highlikely<-which(DE_results$log2FoldChange < -1.5)
+    lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), C12_otu)
+    
+    C12_otu<-rownames(DE_results)[C12_otu]
+    highlikely<-rownames(DE_results)[highlikely]
+    highlikely<-data.frame(highlikely)
+    colnames(highlikely)<-"OTU"
+    lowlikely<-rownames(DE_results)[lowlikely]
+    
+    writeLines(paste("\nIn total you have recovered ", length(C12_otu)," C12-only OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be C12-only and ", length(lowlikely)," are marginal."))
+    
+    ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+    d=C12_otu
+    OTU_location<- vector(mode="numeric", length=length(d))
+    
+    for (mercy in 1:length(d)) {
+      
+      OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+      
+    }
+    
+    C12_otu<-counts[OTU_location,]
+    
+    #Return all Count Data to Original status be subtracting One
+    C12_otu <- C12_otu-1
+    
+    #Make into data.frame
+    C12_otu<-data.frame(C12_otu)
+    C12_otu$likelihood<-NA
+        
+    #Identify demarcate high and low likelihood OTUs and add in the factor information
+    for (OTU in 1:nrow(C12_otu)) {
+      
+      if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+        
+        C12_otu$likelihood[OTU]<- "Low"  
+        
       } else {
+        
+        C12_otu$likelihood[OTU]<- "High"
+        
+      }
+    }    
+    
+    #Separate high rollers from less clear differentiation
+    C12_otu_high<-subset(C12_otu, likelihood == "High")
+    C12_otu_low<-subset(C12_otu, likelihood == "Low")
+    C12_otu_high$likelihood<- NULL
+    C12_otu_low$likelihood<- NULL
+    C12_otu_high<-t(C12_otu_high)
+    C12_otu_low<-t(C12_otu_low)
+    
+    #Add in factors
+    C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
+    C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+    
+    #Graph (Highly Likely OTUs as boxplots)
+    melted_low<-melt(C12_otu_low)
+    melted_high<-melt(C12_otu_high)
+    
+    writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as C12-only.")
+    print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+    writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be C12-only? There are ", nrow(highlikely),"of these OTUs?"))
+    switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+    
+    if (pain == "Yes") {
+      writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+      writeLines("Your factor list is :")
+      print(colnames(sample_data(p)))
+      factor_2<-scan(n=1, what = character())
+      
+      highlikely_remove<-data.frame(highlikely, keep=NA)
+      colnames(highlikely_remove)[1]<-"OTU"
+      writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+      
+      for (T in 1:nrow(highlikely)) {
+        
+        graphics.off()
+        print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+        
+        writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+        print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+        writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+        switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+        
+        if (keep == "High") {
+          
+          highlikely_remove$keep[T]<- "2"
+          
+        } 
+        if (keep == "Yes") {
+          
+          highlikely_remove$keep[T]<- "1"
+          
+        }
+        if (keep == "No") {
+          
+          highlikely_remove$keep[T]<- "0"
+          
+        }
+      }
+    }
+    
+    ##Keep the keepers 
+    manual<-highlikely_remove
+    manual<-cbind(manual, Likelihood_C12=c(rep("high", nrow(highlikely_remove))))
+    write.csv(manual, file=paste("Output\\C12 OTUs - DESeq - Manual Edits_", DESeq_factor, "_", sign_save, "_", cutoff, ".csv", sep=""))
+    C12_otu<-as.vector(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]))
+      
+    #Prune phyloseq to contain enriched OTUs
+    p_C12_DESeq<-prune_taxa(C12_otu, p)
+      
+    print(p_C12_DESeq)
+      
+    saveRDS(p_C12_DESeq, file=paste("Output\\BackUps\\p_c12_OTU_DESeq_", DESeq_factor, "_", sign_save, "_", cutoff,".rds", sep=""))
+    write.csv(taxa_names(p_C12_DESeq), file= paste("Output\\p_C12_OTU_DESeq_", DESeq_factor, "_", sign_save, "_", cutoff,".csv", sep=""))
+      
+    }
+  }
+
+if (proceed == "No") {
+  
+  #Prompt for specific factor to subset according to separate factors
+  writeLines("\nWould you like to specific factor to subset your data by and apply DESeq separately to? If so, please enter it now. If there is none, just hit ENTER.")
+  writeLines("Your factor list is :")
+  print(colnames(sample_data(p)))
+  DESeq_divide<-scan(n=1, what = character())
+  
+  if (DESeq_divide != 0) {
+    
+    writeLines("\nAre you returning to re-analyze the C12 (unenriched) community? If you would you like to skip the 13C OTU selection step, do so now.")
+    switch(menu(c("Do 13C OTU selection", "Skip to 12C")), skip<-("No"), skip<-("Yes"))
+    
+    if (skip == "No") {
+    
+      divide_list<-grep(DESeq_divide, colnames(conds))
+      unique_factor<-as.vector(conds[which(duplicated(conds[,divide_list]) == FALSE),divide_list])
+      
+      for (go in 1:length(unique_factor)) {
+        
+        ##Prepare Count Data
+        #Append factor data to count data
+        counts_foo<-t(counts)
+        counts_foo<-cbind(counts_foo, conds)
+        
+        #Split count data into single factor
+        divide<-unique_factor[go]
+        counts_foo<-subset(counts_foo, get(DESeq_divide) == paste(divide))
+        
+        #Transpose back into OTU x Sample table
+        counts_foo<-data.frame(counts_foo[,1:(ncol(counts_foo)-ncol(conds))])
+        counts_foo<-data.frame(t(counts_foo))
+        
+        ##Prepare Factor Data
+        conds_foo<-subset(conds, get(DESeq_divide) == paste(divide))
+        
+        ##Run DESeq
+        source("DESeq Command.R")
+        
+        ###Run Test for Differential Expression
+        dds <- DESeq(DE)
+        DE_results<-results(dds)
+        DE_results<-DE_results[order(DE_results$log2FoldChange),]
+        
+        writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially expressed in favour of C13 enrichment.")
+        
+        writeLines("\nHere is the count data for your differentially abundant OTU.")
+        print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+        
+        writeLines("\nIs it showing abundance in your C13 samples?")
+        
+        switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+        
+        if (order == "No") {
+          
+          DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+          DE_results<-DE_results[order(DE_results$log2FoldChange),]
+          writeLines("\nNow it should!")
+          print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+          
+        }
+        
+        #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+        enr_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+        highlikely<-which(DE_results$log2FoldChange < -1.5)
+        lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), enr_otu)
+        
+        enr_otu<-rownames(DE_results)[enr_otu]
+        highlikely<-rownames(DE_results)[highlikely]
+        highlikely<-data.frame(highlikely)
+        colnames(highlikely)<-"OTU"
+        lowlikely<-rownames(DE_results)[lowlikely]
+        
+        writeLines(paste("\nIn total you have recovered ", length(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", length(lowlikely)," will have to be manually inspected and confirmed."))
+        
+        ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+        
+        ##Loop to parse the location of each designated OTU and pull that info into a new matrix
+        
+        d=enr_otu
+        OTU_location<- vector(mode="numeric", length=length(d))
+        
+        for (mercy in 1:length(d)) {
+          
+          OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
+          
+        }
+        
+        enr_otu<-counts[OTU_location,]
+        
+        #Return all Count Data to Original status be subtracting One
+        enr_otu <- enr_otu-1
+        
+        #Make into data.frame
+        enr_otu<-data.frame(enr_otu)
+        enr_otu$likelihood<-NA
+                
+        #Identify demarcate high and low likelihood OTUs and add in the factor information
+        for (OTU in 1:nrow(enr_otu)) {
+          
+          if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
+            
+            enr_otu$likelihood[OTU]<- "Low"  
+            
+          } else {
+            
+            enr_otu$likelihood[OTU]<- "High"
+            
+          }
+        }    
+        
+        #Separate high rollers from less clear differentiation
+        enr_otu_high<-subset(enr_otu, likelihood == "High")
+        enr_otu_low<-subset(enr_otu, likelihood == "Low")
+        enr_otu_high$likelihood<- NULL
+        enr_otu_low$likelihood<- NULL
+        enr_otu_high<-t(enr_otu_high)
+        enr_otu_low<-t(enr_otu_low)
+        
+        #Add in factors
+        enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
+        enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
+        
+        #Prepare for Graph 
+        melted_low<-melt(enr_otu_low)
+        melted_high<-melt(enr_otu_high)
+        
+        writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+        print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+        
+        #### Set-up the auto-remove loop
+        writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+        writeLines(paste("\nWould you like to manually examine your", length(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+        switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+        
+        if (pain == "Yes") {
+          writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+          writeLines("Your factor list is :")
+          print(colnames(sample_data(p)))
+          factor_2<-scan(n=1, what = character())
+          
+          lowlikely_remove<-data.frame(lowlikely, keep=NA)
+          colnames(lowlikely_remove)[1]<-"OTU"
+          writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+          for (T in 1:length(lowlikely)) {
+            
+            graphics.off()
+            print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+            
+            writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+            print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
+            writeLines(paste("\nYou have curated", T, "OTUs out of a total of", length(lowlikely), sep=" "))
+            switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+            
+            if (keep == "High") {
+              
+              lowlikely_remove$keep[T]<- "2"
+              
+            } 
+            if (keep == "Yes") {
+              
+              lowlikely_remove$keep[T]<- "1"
+              
+            }
+            if (keep == "No") {
+              
+              lowlikely_remove$keep[T]<- "0"
+              
+            }
+          }
+        }
+      
+        writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+        switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+        
+        if (pain == "Yes") {
+          writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+          writeLines("Your factor list is :")
+          print(colnames(sample_data(p)))
+          factor_2<-scan(n=1, what = character())
+          
+          highlikely_remove<-data.frame(highlikely, keep=NA)
+          colnames(highlikely_remove)[1]<-"OTU"
+          writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+          
+          for (T in 1:nrow(highlikely)) {
+            
+            graphics.off()
+            print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+            
+            writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+            print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
+            writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+            switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+            
+            if (keep == "High") {
+              
+              highlikely_remove$keep[T]<- "2"
+              
+            } 
+            
+            if (keep == "Yes") {
+              
+              highlikely_remove$keep[T]<- "1"
+              
+            }
+            
+            if (keep == "No") {
+              
+              highlikely_remove$keep[T]<- "0"
+              
+            }
+          }
+        }
+        
+        ##Keep the keepers alongside the highlikely OTUs
+        manual<-rbind(highlikely_remove, lowlikely_remove)
+        manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+        manual$Subsetted_by<- paste(divide)
+        
+        assign(divide, manual)
+        
+      }
+      
+      manual<-do.call(rbind, lapply(unique_factor, as.symbol))
+      
+      if (any(duplicated(manual$OTU) == TRUE)) {
+        
+        manual<-manual[-which(duplicated(manual$OTU)),]
+        
+      }
+           
+      ##Keep the keepers alongside the highlikely OTUs
+      write.csv(manual, file=paste("Output\\C13 OTUs - DESeq - Manual Edits_", DESeq_divide, "_", sign_save, "_", cutoff, ".csv", sep=""))
+      enr_otu<-as.vector(manual[which(manual$keep >= 1),1])
+      
+      #Prune phyloseq to contain enriched OTUs
+      p_enr_DESeq<-prune_taxa(enr_otu, p)
+      
+      saveRDS(p_enr_DESeq, file=paste("Output\\BackUps\\p_Enriched_OTU_DESeq_", DESeq_divide, "_",sign_save, "_", cutoff,".rds", sep=""))
+      write.csv(taxa_names(p_enr_DESeq), file= paste("Output\\p_Enriched_OTU_DESeq_", DESeq_divide, "_",sign_save, "_", cutoff,".csv", sep=""))
+      
+    }
+    
+    ####
+    ##Do C12 OTUs
+    ####
+        
+    writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
+    switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
+    
+    if (proceed == "Yes") {
+      
+      #Carrying forward original info in case it has been modified
+      p_12C<-prune_samples(colnames(otu_table(p))[which(sample_data(p)[,status] != paste(label))], p)
+      divide_list<-grep(DESeq_divide, colnames(conds))
+      unique_factor<-as.vector(conds[which(duplicated(conds[,divide_list]) == FALSE),divide_list])
+      
+      ###Pre-filtering steps
+      #Determine which OTU are not found in the OTU table (after C13 sample have been removed)
+      writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C12 group.")
+      total<-nrow(otu_table(p))
+      number<-length(which(rowSums(otu_table(p_12C)) == 0))
+      percent1<-format(round(((number/total)*100), 2), nsmall = 2)
+      p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) == 0),]
+      
+      writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
+      
+      ##Filter based on abundance, maybe rowSum > 5
+      writeLines("\nNext, we will filter by a minimum abundance value across all C12 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C12 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+      threshold<-scan(n=1, what = numeric())
+      number<-length(which(rowSums(otu_table(p_12C)) < threshold))
+      p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) < threshold),]
+      percent2<-format(round(((number/total)*100), 2), nsmall = 2)
+      writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent2,"percent of the original (pre-filtered) OTUs."))
+            
+      ##Filter based on occurrence in minimum number of samples > 3
+      writeLines("\nNext we will filter by the minimum number of times an OTU must occur in C12 samples.\n\n Please select a minimum number. [Recommended: 3]")
+      min_number<-scan(n=1, what = numeric())
+      present_absent<-otu_table(p_12C)
+      present_absent[present_absent > 0] <- 1
+      number<-length(which(rowSums(present_absent) < min_number))
+      p_12C<-otu_table(p_12C)[-which(rowSums(present_absent) < min_number),]
+      percent3<-format(round(((number/total)*100), 2), nsmall = 2)
+      remaining<-format(round(total*(1-((as.numeric(percent1)/100)+(as.numeric(percent2)/100)+(as.numeric(percent3)/100))),0))
+      writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent3,"percent of the original (pre-filtered) OTUs. Combined, you have removed ", as.numeric(percent1)+as.numeric(percent2)+as.numeric(percent3)," percent of your OTUs, which leaves a total of", remaining,"OTUs in your C12 dataset."))
+      
+      #Return to original phyloseq object
+      p_12C<-intersect(rownames(p_12C), taxa_names(p_12C))
+      p_12C<-prune_taxa(p_12C, p)
+      
+      writeLines("\nYour data table now looks like this:\n")
+      print(p_12C)
+      
+      #This step is only made necessary by the fact I have to independently use DESeq, which conflicts with the formatting of a phyloSeq object
+      rows<-nrow(otu_table(p_12C))
+      cols<-ncol(otu_table(p_12C))
+      counts<-as.matrix(otu_table(p_12C)[,])
+      attributes(counts)<-NULL  #Remove phyloseq parameters
+      counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+      rownames(counts)<-taxa_names(p_12C)   #Return row and column names
+      colnames(counts)<-sample_names(p_12C)
+      counts<-data.frame(counts)
+      
+      #Prepare the condition matrix 
+      conds<-matrix(nrow=cols, ncol=1) #Rows are equal to columns here b/c were talking about samples not OTUs
+      conds[which(sample_data(p_12C)[,status] == paste(label))] <- paste(label)
+      conds[which(sample_data(p_12C)[,status] != paste(label))] <- "C12"
+      conds<-data.frame(conds, as.vector(Factors[, which(colnames(Factors) != paste(status))]))
+      rownames(conds) <- colnames(counts)
+      
+      #Rename column names
+      colnames(conds)[1]<- paste(status)
+      
+      #DESeq calculates the geometric mean, which means all the zeros in my columns are problematic
+      counts<-counts+1
+      
+      for (go in 1:length(unique_factor)) {
+        
+        ##Prepare Count Data
+        #Append factor data to count data
+        counts_foo<-t(counts)
+        counts_foo<-cbind(counts_foo, conds)
+        
+        #Split count data into single factor
+        divide<-unique_factor[go]
+        counts_foo<-subset(counts_foo, get(DESeq_divide) == paste(divide))
+        
+        #Transpose back into OTU x Sample table
+        counts_foo<-data.frame(counts_foo[,1:(ncol(counts_foo)-ncol(conds))])
+        counts_foo<-data.frame(t(counts_foo))
+        
+        ##Prepare Factor Data
+        conds_foo<-subset(conds, get(DESeq_divide) == paste(divide))
+        
+        ##Run DESeq
+        source("DESeq Command.R")
+        
+        ###Run Test for Differential Expression
+        dds <- DESeq(DE)
+        DE_results<-results(dds)
+        DE_results<-DE_results[order(DE_results$log2FoldChange),]
+      
+        writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C12.")
+      
+        writeLines("\nHere is the count data for your differentially abundant OTU.")
+        print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+      
+        writeLines("\nIs it showing abundance in your C12 samples?")
+      
+        switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+      
+        if (order == "No") {
+        
+          DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+          DE_results<-DE_results[order(DE_results$log2FoldChange),]
+          writeLines("\nNow it should!")
+          print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+        
+        }
+      
+        #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+        C12_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+        highlikely<-which(DE_results$log2FoldChange < -1.5)
+        lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), C12_otu)
+      
+        C12_otu<-rownames(DE_results)[C12_otu]
+        highlikely<-rownames(DE_results)[highlikely]
+        highlikely<-data.frame(highlikely)
+        colnames(highlikely)<-"OTU"
+        lowlikely<-rownames(DE_results)[lowlikely]
+      
+        writeLines(paste("\nIn total you have recovered ", length(C12_otu)," C12-only OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be C12-only and ", length(lowlikely)," are marginal."))
+      
+        ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+        d=C12_otu
+        OTU_location<- vector(mode="numeric", length=length(d))
+      
+        for (mercy in 1:length(d)) {
+        
+          OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+        
+        }
+        
+        C12_otu<-counts[OTU_location,]
+      
+        #Return all Count Data to Original status be subtracting One
+        C12_otu <- C12_otu-1
+      
+        #Make into data.frame
+        C12_otu<-data.frame(C12_otu)
+        C12_otu$likelihood<-NA
+       
+      
+        #Identify demarcate high and low likelihood OTUs and add in the factor information
+        for (OTU in 1:nrow(C12_otu)) {
+        
+          if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+          
+            C12_otu$likelihood[OTU]<- "Low"  
+          
+          } else {
+          
+          C12_otu$likelihood[OTU]<- "High"
+          
+          }
+        }    
+      
+        #Separate high rollers from less clear differentiation
+        C12_otu_high<-subset(C12_otu, likelihood == "High")
+        C12_otu_low<-subset(C12_otu, likelihood == "Low")
+        C12_otu_high$likelihood<- NULL
+        C12_otu_low$likelihood<- NULL
+        C12_otu_high<-t(C12_otu_high)
+        C12_otu_low<-t(C12_otu_low)
+      
+        #Add in factors
+        C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
+        C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+      
+        #Graph (Highly Likely OTUs as boxplots)
+        melted_low<-melt(C12_otu_low)
+        melted_high<-melt(C12_otu_high)
+      
+        writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as C12-only.")
+        print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+        writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be C12-only? There are ", nrow(highlikely),"of these OTUs?"))
+        switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+      
+        if (pain == "Yes") {
+          writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+          writeLines("Your factor list is :")
+          print(colnames(sample_data(p)))
+          factor_2<-scan(n=1, what = character())
+          
+          highlikely_remove<-data.frame(highlikely, keep=NA)
+          colnames(highlikely_remove)[1]<-"OTU"
+          writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+          
+          for (T in 1:nrow(highlikely)) {
+            
+            graphics.off()
+            print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+            
+            writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+            print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+            writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+            switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+            
+            if (keep == "High") {
+              
+              highlikely_remove$keep[T]<- "2"
+              
+            } 
+            if (keep == "Yes") {
+              
+              highlikely_remove$keep[T]<- "1"
+              
+            }
+            if (keep == "No") {
+              
+              highlikely_remove$keep[T]<- "0"
+              
+            }
+          }
+        }
+      
+        ##Keep the keepers alongside the highlikely OTUs
+        manual<-highlikely_remove
+        manual<-cbind(manual, Likelihood_C12=c(rep("high", nrow(highlikely_remove))))
+        manual$Subsetted_by<- paste(divide)
+        
+        assign(divide, manual)
+        
+      }
+      
+      manual<-do.call(rbind, lapply(unique_factor, as.symbol))
+      
+      if (any(duplicated(manual$OTU)) == TRUE) {
+      
+        manual<-manual[-which(duplicated(manual$OTU)),]
+        
+      }
+      
+      ##Keep the keepers 
+      write.csv(manual, file=paste("Output\\C12 OTUs - DESeq - Manual Edits_", DESeq_divide, "_", sign_save, "_", cutoff, ".csv", sep=""))
+      C12_otu<-as.vector(manual[which(manual$keep >= 1),1]) 
+      
+      #Prune phyloseq to contain enriched OTUs
+      p_C12_DESeq<-prune_taxa(C12_otu, p)
+      
+      print(p_C12_DESeq)
+      
+      saveRDS(p_C12_DESeq, file=paste("Output\\BackUps\\p_c12_OTU_DESeq_", DESeq_divide, "_", sign_save, "_", cutoff,".rds", sep=""))
+      write.csv(taxa_names(p_C12_DESeq), file= paste("Output\\p_C12_OTU_DESeq_", DESeq_divide, "_", sign_save, "_", cutoff,".csv", sep=""))
+          
+      }
+    }
+  } else {
+    
+    ##Run DESeq
+    source("DESeq Command.R")
+    
+    ###Run Test for Differential Expression
+    dds <- DESeq(DE)
+    DE_results<-results(dds)
+    DE_results<-DE_results[order(DE_results$log2FoldChange),]
+    
+    writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially expressed in favour of C13 enrichment.")
+    
+    writeLines("\nHere is the count data for your differentially abundant OTU.")
+    print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+    
+    writeLines("\nIs it showing abundance in your C13 samples?")
+    
+    switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+    
+    if (order == "No") {
+      
+      DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+      DE_results<-DE_results[order(DE_results$log2FoldChange),]
+      writeLines("\nNow it should!")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+      
+    }
+    
+    #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+    enr_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+    highlikely<-which(DE_results$log2FoldChange < -1.5)
+    lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), enr_otu)
+    
+    enr_otu<-rownames(DE_results)[enr_otu]
+    highlikely<-rownames(DE_results)[highlikely]
+    highlikely<-data.frame(highlikely)
+    colnames(highlikely)<-"OTU"
+    lowlikely<-rownames(DE_results)[lowlikely]
+    
+    writeLines(paste("\nIn total you have recovered ", length(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", length(lowlikely)," will have to be manually inspected and confirmed."))
+    
+    ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+    
+    ##Loop to parse the location of each designated OTU and pull that info into a new matrix
+    
+    d=enr_otu
+    OTU_location<- vector(mode="numeric", length=length(d))
+    
+    for (mercy in 1:length(d)) {
+      
+      OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
+      
+    }
+    
+    enr_otu<-counts[OTU_location,]
+    
+    #Return all Count Data to Original status be subtracting One
+    enr_otu <- enr_otu-1
+    
+    #Make into data.frame
+    enr_otu<-data.frame(enr_otu)
+    enr_otu$likelihood<-NA
+        
+    #Identify demarcate high and low likelihood OTUs and add in the factor information
+    for (OTU in 1:nrow(enr_otu)) {
+      
+      if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
+        
+        enr_otu$likelihood[OTU]<- "Low"  
+        
+      } else {
+        
+        enr_otu$likelihood[OTU]<- "High"
+        
+      }
+    }    
+    
+    #Separate high rollers from less clear differentiation
+    enr_otu_high<-subset(enr_otu, likelihood == "High")
+    enr_otu_low<-subset(enr_otu, likelihood == "Low")
+    enr_otu_high$likelihood<- NULL
+    enr_otu_low$likelihood<- NULL
+    enr_otu_high<-t(enr_otu_high)
+    enr_otu_low<-t(enr_otu_low)
+    
+    #Add in factors
+    enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
+    enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
+    
+    #Prepare for Graph 
+    melted_low<-melt(enr_otu_low)
+    melted_high<-melt(enr_otu_high)
+    
+    writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+    print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+    
+    #### Set-up the auto-remove loop
+    writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+    writeLines(paste("\nWould you like to manually examine your", length(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+    switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+    
+    if (pain == "Yes") {
+      writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+      writeLines("Your factor list is :")
+      print(colnames(sample_data(p)))
+      factor_2<-scan(n=1, what = character())
+      
+      lowlikely_remove<-data.frame(lowlikely, keep=NA)
+      colnames(lowlikely_remove)[1]<-"OTU"
+      writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+      for (T in 1:length(lowlikely)) {
+        
+        graphics.off()
+        print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+        
+        writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+        print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
+        writeLines(paste("\nYou have curated", T, "OTUs out of a total of", length(lowlikely), sep=" "))
+        switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+        
+        if (keep == "High") {
+          
+          lowlikely_remove$keep[T]<- "2"
+          
+        } 
+        if (keep == "Yes") {
+          
+          lowlikely_remove$keep[T]<- "1"
+          
+        }
+        if (keep == "No") {
+          
+          lowlikely_remove$keep[T]<- "0"
+          
+        }
+      }
+    }
+    
+    writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+    switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+    
+    if (pain == "Yes") {
+      writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+      writeLines("Your factor list is :")
+      print(colnames(sample_data(p)))
+      factor_2<-scan(n=1, what = character())
+      
+      highlikely_remove<-data.frame(highlikely, keep=NA)
+      colnames(highlikely_remove)[1]<-"OTU"
+      writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+      
+      for (T in 1:nrow(highlikely)) {
+        
+        graphics.off()
+        print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+        
+        writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+        print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
+        writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+        switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+        
+        if (keep == "High") {
+          
+          highlikely_remove$keep[T]<- "2"
+          
+        } 
+        
+        if (keep == "Yes") {
+          
+          highlikely_remove$keep[T]<- "1"
+          
+        }
+        
+        if (keep == "No") {
+          
+          highlikely_remove$keep[T]<- "0"
+          
+        }
+      }
+    }
+    
+    ##Keep the keepers alongside the highlikely OTUs
+    manual<-rbind(highlikely_remove, lowlikely_remove)
+    manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+    write.csv(manual, file=paste("Output\\C13 OTUs - DESeq - Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
+    enr_otu<-as.vector(rbind(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]), as.matrix(lowlikely_remove$OTU[lowlikely_remove$keep >= 1])))
+    
+    #Prune phyloseq to contain enriched OTUs
+    p_enr_DESeq<-prune_taxa(enr_otu, p)
+    
+    saveRDS(p_enr_DESeq, file=paste("Output\\BackUps\\p_Enriched_OTU_DESeq_", sign_save, "_", cutoff,".rds", sep=""))
+    write.csv(taxa_names(p_enr_DESeq), file= paste("Output\\p_Enriched_OTU_DESeq_", sign_save, "_", cutoff,".csv", sep=""))
+    
+    writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
+    switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
+    
+    if (proceed == "Yes") {
+      p_12C<-prune_samples(colnames(otu_table(p))[which(sample_data(p)[,status] != paste(label))], p)
+      
+      ###Pre-filtering steps
+      #Determine which OTU are not found in the OTU table (after C13 sample have been removed)
+      writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C12 group.")
+      total<-nrow(otu_table(p))
+      number<-length(which(rowSums(otu_table(p_12C)) == 0))
+      percent1<-format(round(((number/total)*100), 2), nsmall = 2)
+      p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) == 0),]
+      
+      writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
+      
+      ##Filter based on abundance, maybe rowSum > 5
+      writeLines("\nNext, we will filter by a minimum abundance value across all C12 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C12 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+      threshold<-scan(n=1, what = numeric())
+      number<-length(which(rowSums(otu_table(p_12C)) < threshold))
+      p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) < threshold),]
+      percent2<-format(round(((number/total)*100), 2), nsmall = 2)
+      writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent2,"percent of the original (pre-filtered) OTUs."))
+      
+      ##Filter based on occurrence in minimum number of samples > 3
+      writeLines("\nNext we will filter by the minimum number of times an OTU must occur in C12 samples.\n\n Please select a minimum number. [Recommended: 3]")
+      min_number<-scan(n=1, what = numeric())
+      present_absent<-otu_table(p_12C)
+      present_absent[present_absent > 0] <- 1
+      number<-length(which(rowSums(present_absent) < min_number))
+      p_12C<-otu_table(p_12C)[-which(rowSums(present_absent) < min_number),]
+      percent3<-format(round(((number/total)*100), 2), nsmall = 2)
+      remaining<-format(round(total*(1-((as.numeric(percent1)/100)+(as.numeric(percent2)/100)+(as.numeric(percent3)/100))),0))
+      writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent3,"percent of the original (pre-filtered) OTUs. Combined, you have removed ", as.numeric(percent1)+as.numeric(percent2)+as.numeric(percent3)," percent of your OTUs, which leaves a total of", remaining,"OTUs in your C12 dataset."))
+      
+      #Return to original phyloseq object
+      p_12C<-intersect(rownames(p_12C), taxa_names(p_12C))
+      p_12C<-prune_taxa(p_12C, p)
+      
+      writeLines("\nYour data table now looks like this:\n")
+      print(p_12C)
+      
+      #This step is only made necessary by the fact I have to independently use DESeq, which conflicts with the formatting of a phyloSeq object
+      rows<-nrow(otu_table(p_12C))
+      cols<-ncol(otu_table(p_12C))
+      counts<-as.matrix(otu_table(p_12C)[,])
+      attributes(counts)<-NULL  #Remove phyloseq parameters
+      counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+      rownames(counts)<-taxa_names(p_12C)   #Return row and column names
+      colnames(counts)<-sample_names(p_12C)
+      counts<-data.frame(counts)
+      
+      #Prepare the condition matrix 
+      conds<-matrix(nrow=cols, ncol=1) #Rows are equal to columns here b/c were talking about samples not OTUs
+      conds[which(sample_data(p_12C)[,status] == paste(label))] <- paste(label)
+      conds[which(sample_data(p_12C)[,status] != paste(label))] <- "C12"
+      conds<-data.frame(conds, as.vector(Factors[, which(colnames(Factors) != paste(status))]))
+      rownames(conds) <- colnames(counts)
+      
+      #Rename column names
+      colnames(conds)[1]<- paste(status)
+      
+      #DESeq calculates the geometric mean, which means all the zeros in my columns are problematic
+      counts<-counts+1
+      
+      ##Run DESeq
+      source("DESeq Command.R")
+      
+      ###Run Test for Differential Expression
+      dds <- DESeq(DE)
+      DE_results<-results(dds)
+      DE_results<-DE_results[order(DE_results$log2FoldChange),]
+      
+      writeLines("\nDESeq will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C12.")
+      
+      writeLines("\nHere is the count data for your differentially abundant OTU.")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+      
+      writeLines("\nIs it showing abundance in your C12 samples?")
+      
+      switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+      
+      if (order == "No") {
+        
+        DE_results$log2FoldChange<-DE_results$log2FoldChange*(-1)
+        DE_results<-DE_results[order(DE_results$log2FoldChange),]
+        writeLines("\nNow it should!")
+        print(otu_table(p)[rownames(otu_table(p)) == rownames(DE_results)[1]])
+        
+      }
+      
+      #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+      C12_otu<-setdiff(union(which(DE_results$log2FoldChange < -1.25), which(DE_results$padj < 0.05)), which(DE_results$log2FoldChange > 0))
+      highlikely<-which(DE_results$log2FoldChange < -1.5)
+      lowlikely<-intersect(which(DE_results$log2FoldChange < 0 & DE_results$log2FoldChange > -1.5), C12_otu)
+      
+      C12_otu<-rownames(DE_results)[C12_otu]
+      highlikely<-rownames(DE_results)[highlikely]
+      highlikely<-data.frame(highlikely)
+      colnames(highlikely)<-"OTU"
+      lowlikely<-rownames(DE_results)[lowlikely]
+      
+      writeLines(paste("\nIn total you have recovered ", length(C12_otu)," C12-only OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be C12-only and ", length(lowlikely)," are marginal."))
+      
+      ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+      d=C12_otu
+      OTU_location<- vector(mode="numeric", length=length(d))
+      
+      for (mercy in 1:length(d)) {
+        
+        OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+        
+      }
+      
+      C12_otu<-counts[OTU_location,]
+      
+      #Return all Count Data to Original status be subtracting One
+      C12_otu <- C12_otu-1
+      
+      #Make into data.frame
+      C12_otu<-data.frame(C12_otu)
+      C12_otu$likelihood<-NA
+            
+      #Identify demarcate high and low likelihood OTUs and add in the factor information
+      for (OTU in 1:nrow(C12_otu)) {
+        
+        if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+          
+          C12_otu$likelihood[OTU]<- "Low"  
+          
+        } else {
+          
+          C12_otu$likelihood[OTU]<- "High"
+          
+        }
+      }    
+      
+      #Separate high rollers from less clear differentiation
+      C12_otu_high<-subset(C12_otu, likelihood == "High")
+      C12_otu_low<-subset(C12_otu, likelihood == "Low")
+      C12_otu_high$likelihood<- NULL
+      C12_otu_low$likelihood<- NULL
+      C12_otu_high<-t(C12_otu_high)
+      C12_otu_low<-t(C12_otu_low)
+      
+      #Add in factors
+      C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
+      C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+      
+      #Graph (Highly Likely OTUs as boxplots)
+      melted_low<-melt(C12_otu_low)
+      melted_high<-melt(C12_otu_high)
+      
+      writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as C12-only.")
+      print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+      writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be C12-only? There are ", nrow(highlikely),"of these OTUs?"))
+      switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+      
+      if (pain == "Yes") {
+        writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+        writeLines("Your factor list is :")
+        print(colnames(sample_data(p)))
+        factor_2<-scan(n=1, what = character())
+        
+        highlikely_remove<-data.frame(highlikely, keep=NA)
+        colnames(highlikely_remove)[1]<-"OTU"
+        writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+        
+        for (T in 1:nrow(highlikely)) {
+          
+          graphics.off()
+          print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+          
+          writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+          print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+          writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+          switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+          
+          if (keep == "High") {
+            
+            highlikely_remove$keep[T]<- "2"
+            
+          } 
+          if (keep == "Yes") {
+            
+            highlikely_remove$keep[T]<- "1"
+            
+          }
+          if (keep == "No") {
+            
+            highlikely_remove$keep[T]<- "0"
+            
+          }
+        }
+      }
+      
+      ##Keep the keepers 
+      manual<-highlikely_remove
+      manual<-cbind(manual, Likelihood_C12=c(rep("high", nrow(highlikely_remove))))
+      write.csv(manual, file=paste("Output\\C12 OTUs - DESeq - Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
+      C12_otu<-as.vector(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]))
+        
+      #Prune phyloseq to contain enriched OTUs
+      p_C12_DESeq<-prune_taxa(C12_otu, p)
+        
+      print(p_C12_DESeq)
+        
+      saveRDS(p_C12_DESeq, file=paste("Output\\BackUps\\p_c12_OTU_DESeq_", sign_save, "_", cutoff,".rds", sep=""))
+      write.csv(taxa_names(p_C12_DESeq), file= paste("Output\\p_C12_OTU_DESeq_", sign_save, "_", cutoff,".csv", sep=""))
+        
+      }
+    }
+}
+
+if (Method == "Limma") {
+
+#############################
+###Limma + Voom Differential Abundance Profiling
+#############################
+### Voom is newly released (2014) and supposedly equally as good at limiting the # of false-positive as DESeq, but less 
+### conservative and more able to identify differentially expressed genes.
+#############################
+
+#Get count data in correct format
+rows<-nrow(otu_table(p_enr))
+cols<-ncol(otu_table(p_enr))
+counts<-as.matrix(otu_table(p_enr)[,])
+attributes(counts)<-NULL  #Remove phyloseq parameters
+counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+rownames(counts)<-taxa_names(p_enr)   #Return row and column names
+colnames(counts)<-sample_names(p_enr)
+counts<-data.frame(counts)
+
+#Prepare the condition matrix 
+conds<-matrix(nrow=cols, ncol=1) #Rows are equal to columns here b/c were talking about samples not OTUs
+conds[which(sample_data(p_enr)[,status] == paste(label))] <- paste(label)
+conds[which(sample_data(p_enr)[,status] != paste(label))] <- "C12"
+conds<-data.frame(conds, as.vector(Factors[, which(colnames(Factors) != paste(status))]))
+rownames(conds) <- colnames(counts)
+
+#Rename column names
+colnames(conds)[1]<- paste(status)
+
+#Prompt for specific factor to subset according to separate factors
+writeLines("\nWould you like to specific factor to subset your data by and apply Limma-Voom separately to? If so, please enter it now. If there is none, just hit ENTER.")
+writeLines("Your factor list is :")
+print(colnames(sample_data(p)))
+VOOM_divide<-scan(n=1, what = character())
+
+if (VOOM_divide != 0) {
+  
+  writeLines("\nAre you returning to re-analyze the C12 (unenriched) community? If you would you like to skip the 13C OTU selection step, do so now.")
+  switch(menu(c("Do 13C OTU selection", "Skip to 12C")), skip<-("No"), skip<-("Yes"))
+  
+  if (skip == "No") {
+    
+    divide_list<-grep(VOOM_divide, colnames(conds))
+    unique_factor<-as.vector(conds[which(duplicated(conds[,divide_list]) == FALSE),divide_list])
+    
+    for (go in 1:length(unique_factor)) {
+      ##Prepare Count Data
+      #Append factor data to count data
+      counts_foo<-t(counts)
+      counts_foo<-cbind(counts_foo, conds)
+      
+      #Split count data into single factor
+      divide<-unique_factor[go]
+      counts_foo<-subset(counts_foo, get(VOOM_divide) == paste(divide))
+      
+      #Transpose back into OTU x Sample table
+      counts_foo<-data.frame(counts_foo[,1:(ncol(counts_foo)-ncol(conds))])
+      counts_foo<-data.frame(t(counts_foo))
+      
+      ##Prepare Factor Data
+      conds_foo<-subset(conds, get(VOOM_divide) == paste(divide))
+      
+      #Make design matrix
+      Enrichment <-conds_foo[,colnames(conds_foo) == status]
+      design <- model.matrix(~Enrichment)
+      
+      #the voom-limma process
+      norm.factor <- calcNormFactors(counts_foo)
+      dat.voomed <- voom(counts_foo, design, plot = TRUE, lib.size = colSums(counts_foo) * norm.factor)
+      fit <- lmFit(dat.voomed, design)
+      fit <- eBayes(fit)
+      
+      TopHits<-topTable(fit, coef = paste("Enrichment", label, sep=""), sort.by = "logFC", adjust.method="BH", number=Inf)
+      TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+      
+      writeLines("\nLimma-voom will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C13.")
+      writeLines("\nHere is the count data for your differentially abundant OTU.")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+      
+      writeLines("\nIs it showing abundance in your C13 samples?")
+      switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+      
+      if (order == "No") {
+        TopHits$logFC<-TopHits$logFC*(-1)
+        TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+        writeLines("\nNow it should!")
+        print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+        
+      }
+      
+      if (any(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0) != FALSE) {
+        
+        #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+        enr_otu<-TopHits[which(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0),]
+        highlikely<-which(enr_otu$logFC > 1.5)
+        lowlikely<-which(enr_otu$logFC < 1.5)
+        
+        highlikely<-rownames(enr_otu)[highlikely]
+        highlikely<-data.frame(highlikely)
+        colnames(highlikely)<-"OTU"
+        lowlikely<-rownames(enr_otu)[lowlikely]
+        lowlikely<-data.frame(lowlikely)
+        colnames(lowlikely)<-"OTU"
+        
+        enr_otu<-rownames(enr_otu)
+        
+        writeLines(paste("\nIn total you have recovered ", nrow(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", nrow(lowlikely)," will have to be manually inspected and confirmed."))
+        
+        ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+        d=enr_otu
+        OTU_location<- vector(mode="numeric", length=length(d))
+        
+        for (mercy in 1:length(d)) {
+          
+          OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
+          
+        }
+        
+        enr_otu<-counts[OTU_location,]
+        
+        #Make into data.frame
+        enr_otu<-data.frame(enr_otu)
+        enr_otu$likelihood<-NA
+        
+        #Identify demarcate high and low likelihood OTUs and add in the factor information
+        for (OTU in 1:nrow(enr_otu)) {
+          
+          if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
+            
+            enr_otu$likelihood[OTU]<- "Low"  
+            
+          } else {
+            
+            enr_otu$likelihood[OTU]<- "High"
+            
+          }
+        }    
+        
+        #Separate high rollers from less clear differentiation
+        enr_otu_high<-subset(enr_otu, likelihood == "High")
+        enr_otu_low<-subset(enr_otu, likelihood == "Low")
+        enr_otu_high$likelihood<- NULL
+        enr_otu_low$likelihood<- NULL
+        enr_otu_high<-t(enr_otu_high)
+        enr_otu_low<-t(enr_otu_low)
+        
+        if (ncol(enr_otu_low) != 0) {
+          
+          #Add in factors
+          enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
+          
+          #Graph (Highly Likely OTUs as boxplots)
+          melted_low<-melt(enr_otu_low)
+          
+          writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+          print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+          
+          #### Set-up the auto-remove loop
+          writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+          writeLines(paste("\nWould you like to manually examine your", nrow(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+          switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+          
+          if (pain == "Yes") {
+            writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+            writeLines("Your factor list is :")
+            print(colnames(sample_data(p)))
+            factor_2<-scan(n=1, what = character())
+            
+            lowlikely_remove<-data.frame(lowlikely, keep=NA)
+            colnames(lowlikely_remove)[1]<-"OTU"
+            writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+            for (T in 1:nrow(lowlikely)) {
+              
+              graphics.off()
+              print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+              
+              writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+              print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
+              writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(lowlikely), sep=" "))
+              switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+              
+              if (keep == "High") {
+                
+                lowlikely_remove$keep[T]<- "2"
+                
+              } 
+              if (keep == "Yes") {
+                
+                lowlikely_remove$keep[T]<- "1"
+                
+              }
+              if (keep == "No") {
+                
+                lowlikely_remove$keep[T]<- "0"
+                
+              }
+            }
+          }
+          
+        }
+        
+        if (ncol(enr_otu_high) != 0) {
+         
+          #Add in factors
+          enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
+          
+          #Graph (Highly Likely OTUs as boxplots)
+          melted_high<-melt(enr_otu_high)
+          
+          writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+          print(ddply(melted_high, ~ Enrichment, summarize, value=sum(value)))
+          
+          writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+          switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+          
+          if (pain == "Yes") {
+            writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+            writeLines("Your factor list is :")
+            print(colnames(sample_data(p)))
+            factor_2<-scan(n=1, what = character())
+            
+            highlikely_remove<-data.frame(highlikely, keep=NA)
+            colnames(highlikely_remove)[1]<-"OTU"
+            writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+            
+            for (T in 1:nrow(highlikely)) {
+              
+              graphics.off()
+              print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+              
+              writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+              print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
+              writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+              switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+              
+              if (keep == "High") {
+                
+                highlikely_remove$keep[T]<- "2"
+                
+              } 
+              if (keep == "Yes") {
+                
+                highlikely_remove$keep[T]<- "1"
+                
+              }
+              if (keep == "No") {
+                
+                highlikely_remove$keep[T]<- "0"
+                
+              }
+            }
+          }
+        }
+        
+        if (ncol(enr_otu_high) != 0 & (ncol(enr_otu_low) != 0)) {
+          
+          ##Keep the keepers alongside the highlikely OTUs
+          manual<-rbind(highlikely_remove, lowlikely_remove)
+          manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+          manual$Subsetted_by<- paste(divide)
+          
+        }
+        
+        if (ncol(enr_otu_high) != 0 & (ncol(enr_otu_low) == 0)) {
+          
+          ##Keep the keepers alongside the highlikely OTUs
+          manual<-rbind(highlikely_remove)
+          manual<-cbind(manual, Likelihood_Enriched=rep("high", nrow(highlikely_remove)))
+          manual$Subsetted_by<- paste(divide)
+          
+        }
+        
+        if (ncol(enr_otu_high) == 0 & (ncol(enr_otu_low) != 0)) {
+          
+          ##Keep the keepers alongside the highlikely OTUs
+          manual<-rbind(lowlikely_remove)
+          manual<-cbind(manual, Likelihood_Enriched=rep("low", nrow(lowlikely_remove)))
+          manual$Subsetted_by<- paste(divide)
+          
+        }
+                
+      } else { 
+        
+        manual <- data.frame(OTU=0,keep=0,Likelihood_Enriched=0,Subsetted_by=0)
+        
+      }
+      
+      assign(divide, manual)
+
+    }
+      
+    manual<-do.call(rbind, lapply(unique_factor, as.symbol))
+    
+    if (any(duplicated(manual$OTU)) == TRUE) {
+      manual<-manual[-which(duplicated(manual$OTU)),]
+    }
+    
+    if (any(manual$OTU == 0) == TRUE) {
+    manual<-manual[-which(manual$OTU == 0),]
+    
+    }
+    
+    ##Keep the keepers alongside the highlikely OTUs
+    write.csv(manual, file=paste("Output\\C13 OTUs - voom - Manual Edits_", VOOM_divide, "_", sign_save, "_", cutoff, ".csv", sep=""))
+    enr_otu<-as.vector(manual[which(manual$keep >= 1),1])
+      
+    #Prune phyloseq to contain enriched OTUs
+    p_enr_voom<-prune_taxa(enr_otu, p)
+      
+    saveRDS(p_enr_voom, file=paste("Output\\BackUps\\p_Enriched_OTU_voom_", VOOM_divide, "_", sign_save, "_", cutoff,".rds", sep=""))
+    write.csv(taxa_names(p_enr_voom), file= paste("Output\\p_Enriched_OTU_voom_", VOOM_divide, "_", sign_save, "_", cutoff,".csv", sep=""))
+      
+    }
+    
+  ####
+  #Repeat for C12 OTUs
+  ####
+  
+  writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
+  switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
+  
+  if (proceed == "Yes") {
+    p_12C<-prune_samples(colnames(otu_table(p))[which(sample_data(p)[,status] != paste(label))], p)
+    divide_list<-grep(VOOM_divide, colnames(conds))
+    unique_factor<-as.vector(conds[which(duplicated(conds[,divide_list]) == FALSE),divide_list])
+    
+    ###Pre-filtering steps
+    #Determine which OTU are not found in the OTU table (after C12 sample have been removed)
+    writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C12 group.")
+    total<-nrow(otu_table(p))
+    number<-length(which(rowSums(otu_table(p_12C)) == 0))
+    percent1<-format(round(((number/total)*100), 2), nsmall = 2)
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) == 0),]
+    
+    writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
+    
+    ##Filter based on abundance, maybe rowSum > 5
+    writeLines("\nNext, we will filter by a minimum abundance value across all C12 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C12 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+    threshold<-scan(n=1, what = numeric())
+    number<-length(which(rowSums(otu_table(p_12C)) < threshold))
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) < threshold),]
+    percent2<-format(round(((number/total)*100), 2), nsmall = 2)
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent2,"percent of the original (pre-filtered) OTUs."))
+    
+    ##Filter based on occurrence in minimum number of samples > 3
+    writeLines("\nNext we will filter by the minimum number of times an OTU must occur in C12 samples.\n\n Please select a minimum number. [Recommended: 3]")
+    min_number<-scan(n=1, what = numeric())
+    present_absent<-otu_table(p_12C)
+    present_absent[present_absent > 0] <- 1
+    number<-length(which(rowSums(present_absent) < min_number))
+    p_12C<-otu_table(p_12C)[-which(rowSums(present_absent) < min_number),]
+    percent3<-format(round(((number/total)*100), 2), nsmall = 2)
+    remaining<-format(round(total*(1-((as.numeric(percent1)/100)+(as.numeric(percent2)/100)+(as.numeric(percent3)/100))),0))
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent3,"percent of the original (pre-filtered) OTUs. Combined, you have removed ", as.numeric(percent1)+as.numeric(percent2)+as.numeric(percent3)," percent of your OTUs, which leaves a total of", remaining,"OTUs in your C12 dataset."))
+    
+    #Return to original phyloseq object
+    p_12C<-intersect(rownames(p_12C), taxa_names(p_12C))
+    p_12C<-prune_taxa(p_12C, p)
+    
+    writeLines("\nYour data table now looks like this:\n")
+    print(p_12C)
+    
+    #Only necessary due to conflicts with the formatting of a phyloSeq object
+    rows<-nrow(otu_table(p_12C))
+    cols<-ncol(otu_table(p_12C))
+    counts<-as.matrix(otu_table(p_12C)[,])
+    attributes(counts)<-NULL  #Remove phyloseq parameters
+    counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+    rownames(counts)<-taxa_names(p_12C)   #Return row and column names
+    colnames(counts)<-sample_names(p_12C)
+    counts<-data.frame(counts)
+    
+    for (go in 1:length(unique_factor)) {
+      
+      ##Prepare Count Data
+      #Append factor data to count data
+      counts_foo<-counts
+      
+      #Remove any columns and rows which are equal or less than one
+      if (any(rowSums(counts_foo) == 0) == TRUE) {
+        counts_foo<- counts_foo[-which(rowSums(counts_foo) == 0),]
+      }
+      
+      if (any(colSums(counts_foo) <= 1) == TRUE) {
+        factor_erase<- colnames(counts_foo)[which(colSums(counts_foo) <= 1)]
+        counts_foo<- counts_foo[,-which(colSums(counts_foo) <= 1)]
+      }
+      
+      counts_foo<-t(counts_foo)
+      
+      if (exists("factor_erase") == TRUE) {
+        counts_foo<-cbind(counts_foo, conds[-which(rownames(conds) == factor_erase),])
+      } else {
+        counts_foo<-cbind(counts_foo, conds)
+      }
+      
+      #Split count data into single factor
+      divide<-unique_factor[go]
+      counts_foo<-subset(counts_foo, get(VOOM_divide) == paste(divide))
+      
+      #Transpose back into OTU x Sample table
+      counts_foo<-data.frame(counts_foo[,1:(ncol(counts_foo)-ncol(conds))])
+      counts_foo<-data.frame(t(counts_foo))
+      
+      ##Prepare Factor Data
+      if (exists("factor_erase") == TRUE) {
+        conds_foo<-subset(conds[-which(rownames(conds) == factor_erase),], get(VOOM_divide) == paste(divide))
+      } else {
+        conds_foo<-subset(conds, get(VOOM_divide) == paste(divide))
+      }
+                  
+      #Make design matrix
+      Enrichment <-conds_foo[,colnames(conds_foo) == status]
+      design <- model.matrix(~Enrichment)
+      
+      #the voom-limma process
+      norm.factor <- calcNormFactors(counts_foo)
+      dat.voomed <- voom(counts_foo, design, plot = TRUE, lib.size = colSums(counts_foo) * norm.factor)
+      fit <- lmFit(dat.voomed, design)
+      fit <- eBayes(fit)
+      
+      TopHits<-topTable(fit, coef = paste("Enrichment", label, sep=""), sort.by = "logFC", adjust.method="BH", number=Inf)
+      TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+      
+      writeLines("\nLimma-voom will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C13.")
+      writeLines("\nHere is the count data for your differentially abundant OTU.")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+      
+      writeLines("\nIs it showing abundance in your C12 samples?")
+      switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+      
+      if (order == "No") {
+        TopHits$logFC<-TopHits$logFC*(-1)
+        TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+        writeLines("\nNow it should!")
+        print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+        
+      }
+      
+      if (any(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0) != FALSE) {
+        
+      #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+      C12_otu<-TopHits[which(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0),]
+      highlikely<-which(C12_otu$logFC > 1.5)
+      lowlikely<-which(C12_otu$logFC < 1.5)
+      
+      highlikely<-rownames(C12_otu)[highlikely]
+      highlikely<-data.frame(highlikely)
+      colnames(highlikely)<-"OTU"
+      lowlikely<-rownames(C12_otu)[lowlikely]
+      lowlikely<-data.frame(lowlikely)
+      colnames(lowlikely)<-"OTU"
+      
+      C12_otu<-rownames(C12_otu)
+      
+      writeLines(paste("\nIn total you have recovered ", nrow(C12_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", nrow(lowlikely)," is marginal and (unlike 13C selection) will be ignored."))
+      
+      ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+      d=C12_otu
+      OTU_location<- vector(mode="numeric", length=length(d))
+      
+      for (mercy in 1:length(d)) {
+        
+        OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+        
+      }
+      
+      C12_otu<-counts[OTU_location,]
+      
+      #Make into data.frame
+      C12_otu<-data.frame(C12_otu)
+      C12_otu$likelihood<-NA
+      
+      #Identify demarcate high and low likelihood OTUs and add in the factor information
+      for (OTU in 1:nrow(C12_otu)) {
+        
+        if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+          
+          C12_otu$likelihood[OTU]<- "Low"  
+          
+        } else {
+          
+          C12_otu$likelihood[OTU]<- "High"
+          
+        }
+      }    
+      
+      #Separate high rollers from less clear differentiation
+      C12_otu_high<-subset(C12_otu, likelihood == "High")
+      C12_otu_low<-subset(C12_otu, likelihood == "Low")
+      C12_otu_high$likelihood<- NULL
+      C12_otu_low$likelihood<- NULL
+      C12_otu_high<-t(C12_otu_high)
+      C12_otu_low<-t(C12_otu_low)
+    
+      if (ncol(C12_otu_low) != 0) {
+        
+        #Add in factors
+        C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+        
+        #Graph (Highly Likely OTUs as boxplots)
+        melted_low<-melt(C12_otu_low)
+        
+        writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+        print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+        
+        #### Set-up the auto-remove loop
+        writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+        writeLines(paste("\nWould you like to manually examine your", nrow(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+        switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+        
+        if (pain == "Yes") {
+          writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+          writeLines("Your factor list is :")
+          print(colnames(sample_data(p)))
+          factor_2<-scan(n=1, what = character())
+          
+          lowlikely_remove<-data.frame(lowlikely, keep=NA)
+          colnames(lowlikely_remove)[1]<-"OTU"
+          writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+          for (T in 1:nrow(lowlikely)) {
+            
+            graphics.off()
+            print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+            
+            writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+            print(tax_table(p)[taxa_names(p) == lowlikely_remove$OTU[T],])
+            writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(lowlikely), sep=" "))
+            switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+            
+            if (keep == "High") {
+              
+              lowlikely_remove$keep[T]<- "2"
+              
+            } 
+            if (keep == "Yes") {
+              
+              lowlikely_remove$keep[T]<- "1"
+              
+            }
+            if (keep == "No") {
+              
+              lowlikely_remove$keep[T]<- "0"
+              
+            }
+          }
+        }
+        
+      }
+      
+      if (ncol(C12_otu_high) != 0) {
+        
+        #Add in factors
+        C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
+        
+        #Graph (Highly Likely OTUs as boxplots)
+        melted_high<-melt(C12_otu_high)
+        
+        writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+        print(ddply(melted_high, ~ Enrichment, summarize, value=sum(value)))
+        
+        writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+        switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+        
+        if (pain == "Yes") {
+          writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+          writeLines("Your factor list is :")
+          print(colnames(sample_data(p)))
+          factor_2<-scan(n=1, what = character())
+          
+          highlikely_remove<-data.frame(highlikely, keep=NA)
+          colnames(highlikely_remove)[1]<-"OTU"
+          writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+          
+          for (T in 1:nrow(highlikely)) {
+            
+            graphics.off()
+            print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+            
+            writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+            print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+            writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+            switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+            
+            if (keep == "High") {
+              
+              highlikely_remove$keep[T]<- "2"
+              
+            } 
+            if (keep == "Yes") {
+              
+              highlikely_remove$keep[T]<- "1"
+              
+            }
+            if (keep == "No") {
+              
+              highlikely_remove$keep[T]<- "0"
+              
+            }
+          }
+        }
+      }
+      
+      if (ncol(C12_otu_high) != 0 & (ncol(C12_otu_low) != 0)) {
+        
+        ##Keep the keepers alongside the highlikely OTUs
+        manual<-rbind(highlikely_remove, lowlikely_remove)
+        manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+        manual$Subsetted_by<- paste(divide)
+        
+      }
+      
+      if (ncol(C12_otu_high) != 0 & (ncol(C12_otu_low) == 0)) {
+        
+        ##Keep the keepers alongside the highlikely OTUs
+        manual<-rbind(highlikely_remove)
+        manual<-cbind(manual, Likelihood_Enriched=rep("high", nrow(highlikely_remove)))
+        manual$Subsetted_by<- paste(divide)
+        
+      }
+      
+      if (ncol(C12_otu_high) == 0 & (ncol(C12_otu_low) != 0)) {
+        
+        ##Keep the keepers alongside the highlikely OTUs
+        manual<-rbind(lowlikely_remove)
+        manual<-cbind(manual, Likelihood_Enriched=rep("low", nrow(lowlikely_remove)))
+        manual$Subsetted_by<- paste(divide)
+        
+      }
+      
+      } else { 
+      
+      manual <- data.frame(OTU=0,keep=0,Likelihood_Enriched=0,Subsetted_by=0)
+      
+    }
+    
+    assign(divide, manual)
+      
+    }
+    
+    manual<-do.call(rbind, lapply(unique_factor, as.symbol))
+    
+    if (any(duplicated(manual$OTU)) == TRUE) {
+      manual<-manual[-which(duplicated(manual$OTU)),]
+    }
+    
+    if (any(manual$OTU == 0) == TRUE) {
+    manual<-manual[-which(manual$OTU == 0),]
+    }
+    
+    ##Keep the keepers 
+    write.csv(manual, file=paste("Output\\C12 OTUs - voom - Manual Edits_", VOOM_divide, "_", sign_save, "_", cutoff, ".csv", sep=""))
+    C12_otu<-as.vector(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]))
+    enr_otu<-as.vector(manual[which(manual$keep >= 1),1])
+      
+    #Prune phyloseq to contain enriched OTUs
+    p_C12_voom<-prune_taxa(C12_otu, p)
+      
+    print(p_C12_voom)
+      
+    saveRDS(p_C12_voom, file=paste("Output\\BackUps\\p_c12_OTU_voom_", VOOM_divide, "_", sign_save, "_", cutoff,".rds", sep=""))
+    write.csv(taxa_names(p_C12_voom), file= paste("Output\\p_C12_OTU_voom_", VOOM_divide, "_", sign_save, "_", cutoff,".csv", sep=""))
+    
+  }
+
+} else {
+  #Make design matrix
+  Enrichment <-Factors[,colnames(Factors) == status]
+  design <- model.matrix(~Enrichment)
+  
+  #Get count data in correct format
+  rows<-nrow(otu_table(p_enr))
+  cols<-ncol(otu_table(p_enr))
+  counts<-as.matrix(otu_table(p_enr)[,])
+  attributes(counts)<-NULL  #Remove phyloseq parameters
+  counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+  rownames(counts)<-taxa_names(p_enr)   #Return row and column names
+  colnames(counts)<-sample_names(p_enr)
+  counts<-data.frame(counts)
+  
+  #the voom-limma process
+  norm.factor <- calcNormFactors(counts)
+  dat.voomed <- voom(counts, design, plot = TRUE, lib.size = colSums(counts) * norm.factor)
+  fit <- lmFit(dat.voomed, design)
+  fit <- eBayes(fit)
+  
+  TopHits<-topTable(fit, coef = paste("Enrichment", label, sep=""), sort.by = "logFC", adjust.method="BH", number=Inf)
+  TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+  
+  writeLines("\nLimma-voom will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C13.")
+  writeLines("\nHere is the count data for your differentially abundant OTU.")
+  print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+  
+  writeLines("\nIs it showing abundance in your C13 samples?")
+  switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+  
+  if (order == "No") {
+    TopHits$logFC<-TopHits$logFC*(-1)
+    TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+    writeLines("\nNow it should!")
+    print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+    
+  }
+  
+  #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+  enr_otu<-TopHits[which(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0),]
+  highlikely<-which(enr_otu$logFC > 1.5)
+  lowlikely<-which(enr_otu$logFC < 1.5)
+  
+  highlikely<-rownames(enr_otu)[highlikely]
+  highlikely<-data.frame(highlikely)
+  colnames(highlikely)<-"OTU"
+  lowlikely<-rownames(enr_otu)[lowlikely]
+  lowlikely<-data.frame(lowlikely)
+  colnames(lowlikely)<-"OTU"
+  
+  enr_otu<-rownames(enr_otu)
+  
+  writeLines(paste("\nIn total you have recovered ", length(enr_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", nrow(lowlikely)," will have to be manually inspected and confirmed."))
+  
+  ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+  d=enr_otu
+  OTU_location<- vector(mode="numeric", length=length(d))
+  
+  for (mercy in 1:length(d)) {
+    
+    OTU_location[mercy]<-grep(enr_otu[mercy], rownames(counts))
+    
+  }
+  
+  enr_otu<-counts[OTU_location,]
+  
+  #Make into data.frame
+  enr_otu<-data.frame(enr_otu)
+  enr_otu$likelihood<-NA
+  
+  #Identify demarcate high and low likelihood OTUs and add in the factor information
+  for (OTU in 1:nrow(enr_otu)) {
+    
+    if (length(grep(rownames(enr_otu)[OTU], highlikely$OTU)) == 0) {
+      
+      enr_otu$likelihood[OTU]<- "Low"  
+      
+    } else {
+      
+      enr_otu$likelihood[OTU]<- "High"
+      
+    }
+  }    
+  
+  #Separate high rollers from less clear differentiation
+  enr_otu_high<-subset(enr_otu, likelihood == "High")
+  enr_otu_low<-subset(enr_otu, likelihood == "Low")
+  enr_otu_high$likelihood<- NULL
+  enr_otu_low$likelihood<- NULL
+  enr_otu_high<-t(enr_otu_high)
+  enr_otu_low<-t(enr_otu_low)
+  
+  #Add in factors
+  enr_otu_high<-data.frame(enr_otu_high, as.vector(Factors))
+  enr_otu_low<-data.frame(enr_otu_low, as.vector(Factors))
+  
+  #Graph (Highly Likely OTUs as boxplots)
+  melted_low<-melt(enr_otu_low)
+  melted_high<-melt(enr_otu_high)
+  
+  writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as enriched")
+  print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+  
+  #### Set-up the auto-remove loop
+  writeLines("\nYou can now visually verify all of the OTUs which are borderline enriched. Whatever method you employ here, ensure that it is consistent. This is a time-saveing step so that you do not have to employ a variety of logical filters to your data. Depending on the number of OTUs you have at this point, it may make sense to encode some filters.\n\nYou will be able to discard or keep each OTU on the spot.") 
+  writeLines(paste("\nWould you like to manually examine your", nrow(lowlikely),"marginal OTUs? If not, do consider applying your own filter to the data."))
+  switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+  
+  if (pain == "Yes") {
+    writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+    writeLines("Your factor list is :")
+    print(colnames(sample_data(p)))
+    factor_2<-scan(n=1, what = character())
+    
+    lowlikely_remove<-data.frame(lowlikely, keep=NA)
+    colnames(lowlikely_remove)[1]<-"OTU"
+    writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+    for (T in 1:nrow(lowlikely)) {
+      
+      graphics.off()
+      print(ggplot(melted_low[grep(lowlikely_remove$OTU[T],melted_low$variable),], aes(variable, logb(value,base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(counts)"))
+      
+      writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+      print(tax_table(p_enr)[taxa_names(p_enr) == lowlikely_remove$OTU[T],])
+      writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(lowlikely), sep=" "))
+      switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+      
+      if (keep == "High") {
+        
+        lowlikely_remove$keep[T]<- "2"
+        
+      } 
+      if (keep == "Yes") {
+        
+        lowlikely_remove$keep[T]<- "1"
+        
+      }
+      if (keep == "No") {
+        
+        lowlikely_remove$keep[T]<- "0"
+        
+      }
+    }
+  }
+  
+  writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be enriched? There are ", nrow(highlikely),"of these OTUs?"))
+  switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+  
+  if (pain == "Yes") {
+    writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+    writeLines("Your factor list is :")
+    print(colnames(sample_data(p)))
+    factor_2<-scan(n=1, what = character())
+    
+    highlikely_remove<-data.frame(highlikely, keep=NA)
+    colnames(highlikely_remove)[1]<-"OTU"
+    writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+    
+    for (T in 1:nrow(highlikely)) {
+      
+      graphics.off()
+      print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+      
+      writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+      print(tax_table(p_enr)[taxa_names(p_enr) == highlikely_remove$OTU[T],])
+      writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+      switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+      
+      if (keep == "High") {
+        
+        highlikely_remove$keep[T]<- "2"
+        
+      } 
+      if (keep == "Yes") {
+        
+        highlikely_remove$keep[T]<- "1"
+        
+      }
+      if (keep == "No") {
         
         highlikely_remove$keep[T]<- "0"
         
@@ -406,18 +2301,390 @@ if (proceed == "Yes") {
   }
   
   
-  ##Keep the keepers 
-  manual<-highlikely_remove
-  manual<-cbind(manual, Likelihood_C12=c(rep("high", nrow(highlikely_remove))))
-  write.csv(manual, file=paste("Output\\C12 OTUs - List of Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
-  C12_otu<-as.vector(as.matrix(highlikely$OTU[highlikely_remove$keep == 1]))
+  ##Keep the keepers alongside the highlikely OTUs
+  manual<-rbind(highlikely_remove, lowlikely_remove)
+  manual<-cbind(manual, Likelihood_Enriched=c(rep("high", nrow(highlikely_remove)), rep("low", nrow(lowlikely_remove))))
+  write.csv(manual, file=paste("Output\\C13 OTUs - voom - Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
+  enr_otu<-as.vector(rbind(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]), as.matrix(lowlikely_remove$OTU[lowlikely_remove$keep >= 1])))
   
   #Prune phyloseq to contain enriched OTUs
-  p_C12<-prune_taxa(C12_otu, p)
+  p_enr_voom<-prune_taxa(enr_otu, p)
   
-  print(p_C12)
+  saveRDS(p_enr_voom, file=paste("Output\\BackUps\\p_Enriched_OTU_voom_", sign_save, "_", cutoff,".rds", sep=""))
+  write.csv(taxa_names(p_enr_voom), file= paste("Output\\p_Enriched_OTU_voom_", sign_save, "_", cutoff,".csv", sep=""))
   
-  saveRDS(p_C12, file=paste("Output\\BackUps\\p_All_c12_OTU_", sign_save, "_", cutoff,".rds", sep=""))
-  write.csv(taxa_names(p_C12), file= paste("Output\\p_All_C12_OTU_", sign_save, "_", cutoff,".csv", sep=""))
+  ####
+  #Repeat for C12 OTUs
+  ####
+  
+  writeLines("Would you like to perform a similar analyses to verify which OTUs are more commonly present in the C12 Unenriched Samples? This may be useful in contrasting your findings.")
+  switch(menu(c("Yes","No")), proceed<-("Yes"), proceed<-("No"))
+  
+  if (proceed == "Yes") {
+    p_12C<-prune_samples(colnames(otu_table(p))[which(sample_data(p)[,status] != paste(label))], p)
+    
+    ###Pre-filtering steps
+    #Determine which OTU are not found in the OTU table (after C12 sample have been removed)
+    writeLines("\nFirst, we will first remove all OTUs which have zero representation in the C12 group.")
+    total<-nrow(otu_table(p))
+    number<-length(which(rowSums(otu_table(p_12C)) == 0))
+    percent1<-format(round(((number/total)*100), 2), nsmall = 2)
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) == 0),]
+    
+    writeLines(paste("\nWe removed", number," OTUs at this step, which corresponds to", percent1,"percent of OTUs"))
+    
+    ##Filter based on abundance, maybe rowSum > 5
+    writeLines("\nNext, we will filter by a minimum abundance value across all C12 samples, namely, the OTU must be found at an abundance > than the threshold in TOTAL for your C12 samples.\n\n Please select a threshold number. [Recommended: 5] ")
+    threshold<-scan(n=1, what = numeric())
+    number<-length(which(rowSums(otu_table(p_12C)) < threshold))
+    p_12C<-otu_table(p_12C)[-which(rowSums(otu_table(p_12C)) < threshold),]
+    percent2<-format(round(((number/total)*100), 2), nsmall = 2)
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent2,"percent of the original (pre-filtered) OTUs."))
+    
+    ##Filter based on occurrence in minimum number of samples > 3
+    writeLines("\nNext we will filter by the minimum number of times an OTU must occur in C12 samples.\n\n Please select a minimum number. [Recommended: 3]")
+    min_number<-scan(n=1, what = numeric())
+    present_absent<-otu_table(p_12C)
+    present_absent[present_absent > 0] <- 1
+    number<-length(which(rowSums(present_absent) < min_number))
+    p_12C<-otu_table(p_12C)[-which(rowSums(present_absent) < min_number),]
+    percent3<-format(round(((number/total)*100), 2), nsmall = 2)
+    remaining<-format(round(total*(1-((as.numeric(percent1)/100)+(as.numeric(percent2)/100)+(as.numeric(percent3)/100))),0))
+    writeLines(paste("\nWe removed", number,"OTUs at this step, which corresponds to", percent3,"percent of the original (pre-filtered) OTUs. Combined, you have removed ", as.numeric(percent1)+as.numeric(percent2)+as.numeric(percent3)," percent of your OTUs, which leaves a total of", remaining,"OTUs in your C12 dataset."))
+    
+    #Return to original phyloseq object
+    p_12C<-intersect(rownames(p_12C), taxa_names(p_12C))
+    p_12C<-prune_taxa(p_12C, p)
+    
+    writeLines("\nYour data table now looks like this:\n")
+    print(p_12C)
+    
+    #Make design matrix
+    Enrichment <-Factors[,colnames(Factors) == status]
+    design <- model.matrix(~Enrichment)
+    
+    #Only necessary due to conflicts with the formatting of a phyloSeq object
+    rows<-nrow(otu_table(p_12C))
+    cols<-ncol(otu_table(p_12C))
+    counts<-as.matrix(otu_table(p_12C)[,])
+    attributes(counts)<-NULL  #Remove phyloseq parameters
+    counts<-matrix(counts, nrow=rows, ncol=cols)  #Create matrix
+    rownames(counts)<-taxa_names(p_12C)   #Return row and column names
+    colnames(counts)<-sample_names(p_12C)
+    counts<-data.frame(counts)
+    
+    #the voom-limma process
+    norm.factor <- calcNormFactors(counts)
+    dat.voomed <- voom(counts, design, plot = TRUE, lib.size = colSums(counts) * norm.factor)
+    fit <- lmFit(dat.voomed, design)
+    fit <- eBayes(fit)
+    
+    TopHits<-topTable(fit, coef = paste("Enrichment", label, sep=""), sort.by = "logFC", adjust.method="BH", number=Inf)
+    TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+    
+    writeLines("\nLimma-voom will assign negative or positive values based on the initial ordering of your factor level, so, we will need to manually verify which OTUs are differentially abundant in favour of C13.")
+    writeLines("\nHere is the count data for your differentially abundant OTU.")
+    print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+    
+    writeLines("\nIs it showing abundance in your C12 samples?")
+    switch(menu(c("Yes","No")), order<-("Yes"), order<-("No"))
+    
+    if (order == "No") {
+      TopHits$logFC<-TopHits$logFC*(-1)
+      TopHits<-TopHits[with(TopHits, order(-logFC)), ]
+      writeLines("\nNow it should!")
+      print(otu_table(p)[rownames(otu_table(p)) == rownames(TopHits)[1]])
+      
+    }
+    
+    #Extract taxa names for all log change <-1.5 | padj <0.05 (it has to be done in this strange way because p-values are missing for many of the interesting OTU)
+    C12_otu<-TopHits[which(TopHits$adj.P.Val < 0.05 & TopHits$logFC > 0),]
+    highlikely<-which(C12_otu$logFC > 1.5)
+    lowlikely<-which(C12_otu$logFC < 1.5)
+    
+    highlikely<-rownames(C12_otu)[highlikely]
+    highlikely<-data.frame(highlikely)
+    colnames(highlikely)<-"OTU"
+    lowlikely<-rownames(C12_otu)[lowlikely]
+    lowlikely<-data.frame(lowlikely)
+    colnames(lowlikely)<-"OTU"
+    
+    C12_otu<-rownames(C12_otu)
+    
+    writeLines(paste("\nIn total you have recovered ", length(C12_otu)," enriched OTUs. Of these OTUs, ", nrow(highlikely), " are highly likely to be enriched and ", nrow(lowlikely)," is marginal and (unlike 13C selection) will be ignored."))
+    
+    ###The following (convoluted script) will prepare the data to visualize the the differnece between enriched and unenriched OTUs
+    d=C12_otu
+    OTU_location<- vector(mode="numeric", length=length(d))
+    
+    for (mercy in 1:length(d)) {
+      
+      OTU_location[mercy]<-grep(C12_otu[mercy], rownames(counts))
+      
+    }
+    
+    C12_otu<-counts[OTU_location,]
+    
+    #Make into data.frame
+    C12_otu<-data.frame(C12_otu)
+    C12_otu$likelihood<-NA
+    
+    #Identify demarcate high and low likelihood OTUs and add in the factor information
+    for (OTU in 1:nrow(C12_otu)) {
+      
+      if (length(grep(rownames(C12_otu)[OTU], highlikely$OTU)) == 0) {
+        
+        C12_otu$likelihood[OTU]<- "Low"  
+        
+      } else {
+        
+        C12_otu$likelihood[OTU]<- "High"
+        
+      }
+    }    
+    
+    #Separate high rollers from less clear differentiation
+    C12_otu_high<-subset(C12_otu, likelihood == "High")
+    C12_otu_low<-subset(C12_otu, likelihood == "Low")
+    C12_otu_high$likelihood<- NULL
+    C12_otu_low$likelihood<- NULL
+    C12_otu_high<-t(C12_otu_high)
+    C12_otu_low<-t(C12_otu_low)
+    
+    #Add in factors
+    C12_otu_high<-data.frame(C12_otu_high, as.vector(Factors))
+    C12_otu_low<-data.frame(C12_otu_low, as.vector(Factors))
+    
+    #Graph (Highly Likely OTUs as boxplots)
+    melted_low<-melt(C12_otu_low)
+    melted_high<-melt(C12_otu_high)
+    
+    writeLines("Here is a quick look at how the total counts breakdown with the OTUs that have been selected as C12-only.")
+    print(ddply(melted_low, ~ Enrichment, summarize, value=sum(value)))
+    writeLines(paste("\nWould you like to manually examine the OTUs which were deemed highly likely to be C12-only? There are ", nrow(highlikely),"of these OTUs?"))
+    switch(menu(c("Visualize and edit","Do it myself later (sometimes causes bugs)")), pain<-("Yes"), pain<-("No"))
+    
+    if (pain == "Yes") {
+      writeLines("\nIs there any other factor you'd like to visualize on your graph? The symbol shape can be made to correspond to a second factor.\nPlease enter it now, if there is none, just hit ENTER.")
+      writeLines("Your factor list is :")
+      print(colnames(sample_data(p)))
+      factor_2<-scan(n=1, what = character())
+      
+      highlikely_remove<-data.frame(highlikely, keep=NA)
+      colnames(highlikely_remove)[1]<-"OTU"
+      writeLines("\nPlease note that the location of the points has arbitrarily been slightly staggered on the x-axis, so symbols do not overlap each other")
+      
+      for (T in 1:nrow(highlikely)) {
+        
+        graphics.off()
+        print(ggplot(melted_high[grep(highlikely_remove$OTU[T],melted_high$variable),], aes(variable, logb(value, base=3), colour=get(status), shape=get(factor_2))) + geom_jitter(size = 5, position = position_jitter(width = 0.02)) + ylab("Log3(Counts)"))
+        
+        writeLines("Please select whether you would like to keep or discard this OTU.\n\nIt's corresponding taxonomy is:")
+        print(tax_table(p)[taxa_names(p) == highlikely_remove$OTU[T],])
+        writeLines(paste("\nYou have curated", T, "OTUs out of a total of", nrow(highlikely), sep=" "))
+        switch(menu(c("Highly Enriched", "Moderately Enriched","Discard")), keep<-("High"), keep<-("Yes"), keep<-("No"))
+        
+        if (keep == "High") {
+          
+          highlikely_remove$keep[T]<- "2"
+          
+        } 
+        if (keep == "Yes") {
+          
+          highlikely_remove$keep[T]<- "1"
+          
+        }
+        if (keep == "No") {
+          
+          highlikely_remove$keep[T]<- "0"
+          
+        }
+      }
+    }
+    
+    
+    ##Keep the keepers 
+    manual<-cbind(highlikely_remove, Likelihood_C12=c(rep("high", nrow(highlikely_remove))))
+    write.csv(manual, file=paste("Output\\C12 OTUs - voom - Manual Edits_", sign_save, "_", cutoff, ".csv", sep=""))
+    C12_otu<-as.vector(as.matrix(highlikely$OTU[highlikely_remove$keep >= 1]))
+    
+    #Prune phyloseq to contain enriched OTUs
+    p_C12_voom<-prune_taxa(C12_otu, p)
+    
+    print(p_C12_voom)
+    
+    saveRDS(p_C12_voom, file=paste("Output\\BackUps\\p_c12_OTU_voom_", sign_save, "_", cutoff,".rds", sep=""))
+    write.csv(taxa_names(p_C12_voom), file= paste("Output\\p_C12_OTU_voom_", sign_save, "_", cutoff,".csv", sep=""))
+    
+  }
+  
+}
+
+
+}
+
+if (Method == "Relative Abundance") {
+  
+  #########
+  #Using Relative Abundance to Identify Enriched OTUs
+  #########
+  
+  ##Use proportion of total counts for each
+  p_rel<-p  
+  
+  for (n in 1:ncol(otu_table(p_rel))) {
+    
+    otu_table(p_rel)[,n] <- otu_table(p_rel)[,n] / sum(otu_table(p_rel)[,n])
+    
+  }
+  
+  ##Calculate relative abundance in between paired C13 and C12 samples 
+  
+  #Simplifying terms for loop
+  #Input which phyloseq object has your paired C13 and C12 samples
+  d<-p_rel  ##The one piece of required information!!
+  
+  writeLines("Your sample labels are:")
+  print(rownames(sample_data(d)))
+  writeLines("\nPlease supply the label you've used in your sample names to distinguish enriched status.For example, \"LogLake01_13C\" would be \"13C\"\n")
+  label_C13<-scan(n=1, what = character())
+  writeLines("\nPlease supply the label you used to demarcate 12C enriched samples. Example : C12\n")
+  label_C12<-scan(n=1, what = character())
+  
+  names<-colnames(otu_table(d))  #note that "d" is used in this term
+  C13_samples<-colnames(otu_table(d))[grep(label_C13, names)] 
+  C12_samples<-colnames(otu_table(d))[grep(label_C12, names)] 
+  
+  C12_sample_holder<- data.frame(C12_samples)
+  C13_sample_holder<- data.frame(C13_samples)
+  
+  C13_samples<-gsub(label_C13, "", C13_samples)
+  C12_samples<-gsub(label_C12, "", C12_samples) 
+  
+  C12_sample_holder$subbed<- C12_samples
+  C13_sample_holder$subbed<- C13_samples
+  
+  p_rel<-matrix(nrow= nrow(otu_table(d)))
+  
+  #Must identify orphaned pairs before running main loop
+  #Remove Sample with only C13 representatives
+  C13_only<-setdiff(C13_samples, C12_samples) 
+  
+  #For orphaned 13C, we'll try to use an average of the the most related C12 samples as a reference
+  
+  if (length(C13_only) != 0) {
+    
+    for (adopt in C13_only) {
+      
+      writeLines(paste("\nThe following sample is orphaned:",adopt))
+      writeLines("\nPlease input a string which may uniquely identify a group of related samples to use as reference for orphaned 13C samples.\n\nFeel free to use regular expression fit for R, such as [A-Z] or [0-9], to manage variation in sample titles.\n\nFor instance, \"LH0[0-9][1,3,5,7,9]\" will use the following fictitious samples \"LH007, LH009, LH011\" to reference \"BL005_C12\" against.")
+      neighbour<-scan(n=1, what = character())
+      avg_neighbour<-C12_samples[grep(neighbour, C12_samples)]
+      
+      for (nextdoor in avg_neighbour) {
+        
+        nextdoor_full <- C12_sample_holder[which(C12_sample_holder$subbed == nextdoor), 1]  #Return to original sample name
+        foo<-otu_table(d)[,colnames(otu_table(d)) == nextdoor_full]
+        assign(paste(nextdoor),foo)
+        
+      }
+      
+      avg_neighbour<-data.frame(do.call(cbind, lapply(avg_neighbour, as.symbol)))
+      avg_neighbour<-data.frame(mean=rowMeans(avg_neighbour))
+      
+      ###NOTE: if your samples weren't named exactly SAMPLEID_13C, then you may get an error in the calls below which use "adopt". alter paste(adopt, "_13C") to match your actual sample names
+      
+      adopt_C13 <- C13_sample_holder[which(C13_sample_holder$subbed == adopt),1]
+      
+      ##Calculate relative abundance in C13 samples
+      C13_rel<-otu_table(d)[,colnames(otu_table(d)) == adopt_C13] / avg_neighbour[,1]
+      
+      #Treat Inf as actual count data (i.e. count / one, rather than zero) 
+      C13_rel[is.infinite(C13_rel)] <- otu_table(d)[which(is.infinite(C13_rel)), grep(adopt_C13, colnames(otu_table(d)))]
+      
+      #Set NaN to zero
+      C13_rel[is.nan(C13_rel)] <- 0 
+      
+      #Set all fractions to zero (B/c these will be replaced with negative rel abundances)
+      C13_rel[C13_rel[,1] < 1 & C13_rel[,1] > 0] <- 0 
+      
+      ##Calculate relative abundance in C12 samples
+      adopt_C12 <- C12_sample_holder[which(C12_sample_holder$subbed == adopt),1]
+      
+      C12_rel<-avg_neighbour[,1] / otu_table(d)[,colnames(otu_table(d)) == adopt_C12]
+      
+      #Repeat above transformations
+      C12_rel[is.infinite(C12_rel)] <- otu_table(d)[which(is.infinite(C12_rel)), grep(adopt_C12, colnames(otu_table(d)))]
+      C12_rel[is.nan(C12_rel)] <- 0 
+      C12_rel[C12_rel[,1] < 1 & C12_rel[,1] > 0] <- 0
+      
+      #Make C12 negative
+      C12_rel[is.finite(C12_rel)] <- C12_rel[is.finite(C12_rel)]*-1
+      
+      #Merge tables
+      list <- as.matrix(C13_rel + C12_rel)
+      p_rel <- cbind(p_rel, list)
+    }
+  }
+  
+  #Remove Sample with only C12 representatives
+  C12_only<-setdiff(C12_samples, C13_samples)
+  
+  if (length(C12_only) != 0) {
+    
+    for (kill in C12_only) {  
+      
+      d<-prune_samples(colnames(otu_table(d))[-grep(kill, colnames(otu_table(d)))], d)
+      
+    } 
+  }
+  
+  ##NOW The main loop for all paired samples
+  #Subset only paired samples
+  paired_C13<-intersect(C13_sample_holder$subbed, C12_sample_holder$subbed) 
+  
+  #Run it
+  for(C13 in paired_C13) {
+    
+    C12 <- C12_sample_holder[which(C12_sample_holder$subbed == C13),1]
+    C13 <- C13_sample_holder[which(C13_sample_holder$subbed == C13),1]
+    
+    ##Calculate relative abundance in C13 samples
+    C13_rel<-otu_table(d)[,grep(C13, names)] / otu_table(d)[,grep(C12, names)]
+    
+    #Treat Inf as actual count data (i.e. count / one, rather than zero) 
+    C13_rel[is.infinite(C13_rel)] <- otu_table(d)[which(is.infinite(C13_rel)), grep(C13, colnames(otu_table(d)))]
+    
+    #Set NaN to zero
+    C13_rel[is.nan(C13_rel)] <- 0 
+    
+    #Set all fractions to zero (B/c these will be replaced with negative rel abundances)
+    C13_rel[C13_rel[,1] < 1 & C13_rel[,1] > 0] <- 0 
+    
+    ##Calculate relative abundance in C12 samples
+    C12_rel<-otu_table(d)[,grep(C12, names)] / otu_table(d)[,grep(C13, names)]
+    
+    #Repeat above transformations
+    if (any(is.infinite(C12_rel)) == TRUE) {
+      
+      C12_rel[is.infinite(C12_rel)] <- otu_table(d)[which(is.infinite(C12_rel)), grep(C12, colnames(otu_table(d)))]
+      C12_rel[is.nan(C12_rel)] <- 0 
+      C12_rel[C12_rel[,1] < 1 & C12_rel[,1] > 0] <- 0
+      
+    } 
+    
+    #Make C12 negative
+    C12_rel[is.finite(C12_rel)] <- C12_rel[is.finite(C12_rel)]*-1
+    
+    #Merge tables
+    list <- as.matrix(C13_rel + C12_rel)
+    p_rel <- cbind(p_rel, list)
+    
+  }
+  
+  p_rel <- p_rel[,-1]
+  
+  saveRDS(p_rel, file=paste("Output\\BackUps\\p_rel_abund_OTU_", sign_save, "_", cutoff,".rds", sep=""))
+  write.csv(taxa_names(p_rel), file= paste("Output\\p_rel_abund_OTU_", sign_save, "_", cutoff,".csv", sep=""))  
   
 }
