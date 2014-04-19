@@ -1,8 +1,8 @@
 Mothur_to_PhyloSeq_to_Differential_Abundance_Tools
 ==================
-An R-script providing guided import from Mothur data to PhyloSeq
+An R-script providing guided import from Mothur data to PhyloSeq followed by profiling for differential abundance according to a given factor. This script was developed for application to identifying OTUs enriched in a SIP-DNA experiment.
 
-This code was used to simplify the import of "count data" output from the sequence processing pipeline Mothur.
+Note: This is one of the author's first attempts at writing a full analysis pipeline AND, he admits that it is not written in a legible or efficient manner. A large proportion of the script could have been written as a loop, and it is not adequately commented. Hopefully the latter will be remedied shortly.
 
 
 Block00 - Installs all required libraries/packages  (Universal)
