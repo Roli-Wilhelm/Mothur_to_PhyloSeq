@@ -4,8 +4,9 @@ library(plyr)
 library(stringr)
 library(reshape2)
 
-dir.create("\\Output")
-dir.create("\\Output\\BackUps")
+PATH <- getwd()
+dir.create(paste(PATH, "\\Output", sep=""))
+dir.create(paste(PATH, "\\Output\\BackUps", sep=""))
 
 writeLines("\nThe minimum files required to create a phyloSeq object from mothur are : \".list\", \".groups\", \".taxonomy\" and a \".csv\" indicating which factors correspond to your samples.\n\nWe will begin by inputting all of this information.")
 
