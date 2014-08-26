@@ -35,7 +35,7 @@ print(show_mothur_list_cutoffs(mothlist))
 writeLines("\nEnter the dissimilarity cut-off you'd like to base your analysis on. Note: this must be present in your \".list\" file.\nExample : 0.05\n")
 cutoff<-scan(n=1, what = character())
 
-writeLines("\n\nPlease note: The following step may take upwards of an hour to import your \".list\" file. Grab a coffee; do something else. If you have already done this step, and have had to re-start the script, please answer accordingly.\n\n Have you already imported your \".list\" and \".groups\" files?")
+writeLines("\n\nPlease note: The following step may take upwards of an hour to import your \".list\" file. Grab a coffee; do something else. If you have already done this step, and have had to re-start the script, please answer accordingly.\n\n Have you specified then imported (long step) your \".list\" and \".groups\" files?")
 switch(menu(c("Yes", "No")), redo<-("Yes"), redo<-("No"))
 
 ##Option of skipping
